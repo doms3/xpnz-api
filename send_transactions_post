@@ -1,0 +1,16 @@
+#! /bin/env bash
+
+curl -X POST localhost:3000/transactions \
+     -H "Content-Type: application/json" \
+     -d '{
+           "name": "Test Transaction",
+           "category": "Test Category",
+           "members": ["Tom", "Dom"],
+           "date": "2024-08-05",
+           "expense_type": "expense",
+           "paid": [100, 200],
+           "currency": "USD",
+           "recurring": false,
+           "ledger": "trap2",
+           "weights": [0.5, 0.5]
+         }'

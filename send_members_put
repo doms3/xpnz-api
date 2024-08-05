@@ -1,0 +1,5 @@
+#! /bin/env bash
+
+curl -X PUT localhost:3000/members/trap2/Stacy \
+     -H "Content-Type: application/json" \
+     -d '{}'
