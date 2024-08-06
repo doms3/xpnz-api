@@ -584,15 +584,28 @@ const transactionsGetQuerySchema = {
   additionalProperties: false
 };
 
+const membersGetResponseSchemaWithRoute = {
+  type: 'object',
+  required: ['name', 'ledger', 'active'],
+  properties: {
+    name: { type: 'string' },
+    ledger: { type: 'string' },
+    active: { type: 'boolean'}
+  }
+}
 
+const membersGetResponseSchema = {
+  type: 'array',
+  items: membersGetResponseSchemaWithRoute
+}
 
 app.get ('/ledgers', ledgersGetHandler);
 app.get ('/ledgers/:ledgerName', ledgersGetHandlerWithRoute);
 app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, ledgersPutHandler);
 app.delete ('/ledgers/:ledgerName', ledgersDeleteHandler);
 
-app.get ('/members', membersGetHandler);
-app.get ('/members/:ledgerName/:memberName', membersGetHandler);
+app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
+app.get ('/members/:ledgerName/:memberName', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
 app.put ('/members/:ledgerName/:memberName', membersPutHandler);
 
 app.get ('/transactions', { schema: { querystring: transactionsGetQuerySchema } }, transactionsGetHandler);
