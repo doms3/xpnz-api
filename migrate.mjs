@@ -99,6 +99,9 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     // remove members with zero amount and weight
     transactionMemberPairs = transactionMemberPairs.filter (pair => pair.amount !== 0 || pair.weight !== 0);
 
+    // flip negative weights
+    transactionMemberPairs = transactionMemberPairs.map (pair => ({ ...pair, weight: pair.weight < 0 ? -pair.weight : pair.weight }));
+
     txsMemberJunctionRows.push (Object.values (transactionMemberPairs));
   }
 
@@ -117,6 +120,8 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     if (tx.name === '' && tx.category === '') {
       tx.name = 'Unnamed transaction';
     }
+
+    if (tx.category === '❓Misc') tx.category = '❓ Miscellaneous';
 
     tx.id = nanoid ();
 
