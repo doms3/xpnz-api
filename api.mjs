@@ -111,7 +111,7 @@ function integerSplitByWeights (totalAmount, weights, seed) {
       }
 
       if (result.every (share => share === 0)) {
-        reply.code (500).send ({ error: 'Internal server error: please contact the maintainer.' });
+        throw new Error ('Assertion failed: all shares are zero.');
       }
     }
   }
