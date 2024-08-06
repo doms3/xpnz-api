@@ -10,8 +10,7 @@ const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 const nanoid = customAlphabet (alphabet, 10);
 
 function makeLedgersTable (table) {
-  table.increments ('id').primary ();
-  table.string ('name').unique ();
+  table.string ('name').primary ();
   table.enu ('default_currency', ['USD', 'EUR', 'CAD', 'PLN']);
 }
 
@@ -24,24 +23,24 @@ function makeTransactionsTable (table) {
   table.float ('exchange_rate');
   table.string ('expense_type');
   table.boolean ('recurring');
-  table.integer ('ledger_id').references ('id').inTable ('ledgers');
+  table.string ('ledger').references ('name').inTable ('ledgers');
 }
 
 function makeMembersTable (table) {
-  table.increments ('id').primary ();
   table.string ('name');
-  table.integer ('ledger_id').references ('id').inTable ('ledgers');
+  table.string ('ledger').references ('name').inTable ('ledgers');
   table.boolean ('active');
-  table.unique (['name', 'ledger_id']);
+  table.primary (['name', 'ledger']);
 }
 
 function makeTransactionsMembersJunction (table) {
-  table.increments ('id').primary ();
   table.string ('transaction_id').references ('id').inTable ('transactions');
-  table.integer ('member_id').references ('id').inTable ('members');
-  table.integer ('ledger_id').references ('id').inTable ('ledgers');
+  table.string ('member');
+  table.string ('ledger').references ('name').inTable ('ledgers');
   table.integer ('amount'); // integer in cents
   table.float ('weight');
+  table.foreign (['member', 'ledger']).references (['name', 'ledger']).inTable ('members');
+  table.primary (['transaction_id', 'member', 'ledger']);
 }
 
 async function createTables () {
@@ -59,7 +58,8 @@ function reduceToObject (array, keyFunction, valueFunction) {
 }
 
 async function importTransactionsFromJsonFile (filename, ledgername) {
-  var ledger_id = await db ('ledgers').insert ({ name: ledgername, default_currency: 'CAD' }).returning ('id').then (rows => rows[0].id);
+  await db ('ledgers').insert ({ name: ledgername, default_currency: 'CAD' });
+
   var json = await fs.readFile (filename);
   var txs = parse (json).value;
 
@@ -82,15 +82,13 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   // get all unique members in the transactions
   var members = [...new Set (txs.map (tx => [...tx.for.members, ...tx.by.members]).flat ())];
 
-  // insert members into the members table and build a map of member names to ids
-  var memberToIdMap = await db ('members').insert (members.map (name => ({ name: name, ledger_id: ledger_id, active: true }))).returning ([ 'name', 'id' ])
-    .then (rows => reduceToObject (rows, row => row.name, row => row.id));
+  await db ('members').insert (members.map (name => ({ name: name, ledger: ledgername, active: true })));
 
   var txsMemberJunctionRows = [];
 
   // build the rows for the transactions_member_junction table (but use a two-dimensional array so we can add tx_id later)
   for (var tx of txs) {
-    var transactionMemberPairs = reduceToObject (members, name => name, name => ({ member_id: memberToIdMap[name], amount: 0, weight: 0, ledger_id: ledger_id }));
+    var transactionMemberPairs = reduceToObject (members, name => name, name => ({ member: name, amount: 0, weight: 0, ledger: ledgername }));
 
     tx.for.members.forEach ((name, index) => transactionMemberPairs[name].weight = tx.for.split_weights[index]);
     tx.by.members.forEach ((name, index) => transactionMemberPairs[name].amount = Math.floor (tx.by.split_values[index] * 100)); // convert to cents
@@ -109,7 +107,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     tx.date = moment.unix (Math.floor(tx.date / 1000)).format ('YYYY-MM-DD');
     
     tx.recurring = false; // reserve for future use
-    tx.ledger_id = ledger_id;
+    tx.ledger = ledgername;
 
     if (tx.name === undefined || tx.name === null) tx.name = '';
     if (tx.category === undefined || tx.category === null) tx.category = '';

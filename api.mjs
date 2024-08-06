@@ -23,8 +23,8 @@ async function membersGetHandler (request, reply) {
 
   const isRequestingSingleMember = request.params.memberName !== undefined && request.params.ledgerName !== undefined;
 
-  const members = await db ('members').join ('ledgers', 'members.ledger_id', 'ledgers.id')
-    .select ('members.name', 'ledgers.name as ledger', 'members.active')
+  const members = await db ('members')
+    .select ('members.name', 'members.ledger', 'members.active')
     .modify (builder => {
       if (filters.ledger) builder.where ('ledgers.name', filters.ledger);
       if (filters.name) builder.where ('members.name', filters.name);
@@ -41,21 +41,21 @@ async function membersGetHandler (request, reply) {
 
 async function membersPutHandler (request, reply) {
   const { memberName, ledgerName } = request.params;
-  const ledger = await db ('ledgers').where ({ name: ledgerName }).first ();
 
-  if (ledger === undefined) {
+
+  if (await db ('ledgers').where ({ name: ledgerName }).first () === undefined) {
     return reply.code (404).send ({ error: 'The specified ledger could not be found.' });
   }
 
   // request.body is either {} or { active: true/false }, if its empty make it true
-  const member = { name: memberName, ledger_id: ledger.id, active: request.body.active === undefined ? true : request.body.active };
+  const member = { name: memberName, ledger: ledgerName, active: request.body.active === undefined ? true : request.body.active };
 
   try {
     await db.transaction (async trx => {
-      const existingMember = await trx ('members').where ({ name: memberName, ledger_id: ledger.id }).first ();
+      const existingMember = await trx ('members').where ({ name: memberName, ledger: ledgerName }).first ();
 
       if (existingMember) {
-        await trx ('members').where ({ name: memberName, ledger_id: ledger.id }).update (member);
+        await trx ('members').where ({ name: memberName, ledger: ledgerName }).update (member);
       } else {
         await trx ('members').insert (member);
       }
@@ -134,8 +134,6 @@ async function getTransactions (filters, options = { format: 'array', useExchang
 
   const query = db ('transactions as t')
     .join ('transactions_member_junction as tm', 't.id', 'tm.transaction_id')
-    .join ('members as m', 'tm.member_id', 'm.id')
-    .join ('ledgers as l', 't.ledger_id', 'l.id')
     .select (
       't.id',
       't.name',
@@ -145,15 +143,15 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       't.exchange_rate',
       't.expense_type',
       't.recurring',
-      'm.name as member',
+      'tm.member',
       'tm.amount',
       'tm.weight',
-      'l.name as ledger'
+      'tm.ledger'
     )
     .orderBy ([{ column: 't.date', order: 'desc' }, { column: 't.id', order: 'desc' }])
     .modify (builder => {
       if (filters.id) builder.where ('t.id', filters.id);
-      if (filters.ledger) builder.where ('l.name', filters.ledger);
+      if (filters.ledger) builder.where ('tm.ledger', filters.ledger);
       if (filters.name) builder.where ('t.name', filters.name);
       if (filters.category) builder.where ('t.category', filters.category);
       if (filters.currency) builder.where ('t.currency', filters.currency);
@@ -269,7 +267,7 @@ async function categoriesGetHandler (request, reply) {
     return reply.code (404).send ({ error: 'The specified ledger does not exist.' });
   }
 
-  const payload = await db ('transactions').select ('category').where ('ledger_id', ledger.id).distinct ();
+  const payload = await db ('transactions').select ('category').where ('ledger', ledgerName).distinct ();
 
   const categories = payload.map (transaction => transaction.category).filter (category => category !== "");
   const allCategories = _.uniq ([ ...defaultCategories, ...categories ]);
@@ -290,7 +288,7 @@ async function balancesGetHandler (request, reply, options = { moneyFormat: 'dol
   }
 
   const transactions = await getTransactions ({ ledger: ledgerName }, { format: 'hash', useExchangeRates: true, moneyFormat: 'cents' });
-  const members = await db ('members').where ({ ledger_id: ledger.id }).select ('name').then (members => members.map (member => member.name));
+  const members = await db ('members').where ({ ledger: ledgerName }).select ('name').then (members => members.map (member => member.name));
 
   return members.map (member => {
     const paid = _ (transactions).map (transaction => transaction.member_contributions[member] ? transaction.member_contributions[member].paid : 0).sum ();
@@ -361,20 +359,17 @@ async function transactionsPutPostHandler (request, reply) {
 
     await validateTransaction (transaction);
 
-    const ledger = await db ('ledgers').where ('name', transaction.ledger).first ();
-    if (ledger === undefined) throw { status: 500, message: 'Internal server error: We validate the ledger name before this point, so this should never happen.' };
-    transaction.ledger_id = ledger.id;
+    const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'recurring', 'ledger']);
 
     if (request.params.id === undefined) {
       try {
         const exchangeRates = await got ('https://open.er-api.com/v6/latest/CAD').json ();
-        transaction.exchange_rate = 1 / exchangeRates.rates[transaction.currency];
+        newTransaction.exchange_rate = 1 / exchangeRates.rates[transaction.currency];
       } catch (error) {
         throw { status: 500, message: 'Internal server error: Unable to get exchange rates.' };
       }
     }
 
-    const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'exchange_rate', 'expense_type', 'recurring', 'ledger_id']);
    
     try {
       await db.transaction (async trx => {
@@ -390,12 +385,12 @@ async function transactionsPutPostHandler (request, reply) {
           await trx ('transactions').insert (newTransaction);
         }
 
-        const transactionsMemberJunctionItems = transaction.memberIds.map ((memberId, index) => ({
+        const transactionsMemberJunctionItems = transaction.members.map ((member, index) => ({
           transaction_id: transaction.id,
-          member_id: memberId,
+          member: member,
           weight: transaction.weights[index],
           amount: Math.floor (transaction.paid[index] * 100),
-          ledger_id: transaction.ledger_id
+          ledger: transaction.ledger
         }));
         
         await trx ('transactions_member_junction').insert (transactionsMemberJunctionItems);
@@ -447,14 +442,11 @@ async function validateTransaction (transaction) {
 
   // Get the members of the ledger
   const members = await db ('members')
-    .join ('ledgers', 'members.ledger_id', 'ledgers.id')
-    .where ('ledgers.name', transaction.ledger)
-    .select ('members.name', 'members.id')
-    .then (members => _.keyBy (members, 'name'));
+    .where ('ledger', transaction.ledger)
+    .select ('name')
+    .then (members => members.map (member => member.name));
 
-  transaction.memberIds = transaction.members.map (member => _.get (members, [member, 'id']));
-
-  if (transaction.memberIds.includes (undefined)) {
+  if (transaction.members.every (member => members.includes (member)) == false) {
     throw { status: 400, message: 'One or more members do not exist in the ledger.' };
   }
 }
@@ -471,15 +463,11 @@ async function ledgersDeleteHandler (request, reply) {
       return;
     }
 
-    const ledgerId = ledger.id;
-
     // Delete all members and transactions associated with the ledger
-    await trx ('members').where ('ledger_id', ledgerId).del ();
-    await trx ('transactions').where ('ledger_id', ledgerId).del ();
-    await trx ('transactions_member_junction').where ('ledger_id', ledgerId).del ();
-
-    // Delete the ledger
-    await trx ('ledgers').where ('id', ledgerId).del ();
+    await trx ('members').where ('ledger', ledgerName).del ();
+    await trx ('transactions').where ('ledger', ledgerName).del ();
+    await trx ('transactions_member_junction').where ('ledger', ledgerName).del ();
+    await trx ('ledgers').where ('name', ledgerName).del ();
 
     reply.code (200).send ({ message: 'Ledger deleted successfully.' });
   }).catch (error => {
@@ -498,8 +486,6 @@ async function transactionsDeleteHandler (request, reply) {
       reply.code (204).send ({ message: 'The specified resource does not exist.' });
       return;
     }
-
-    const ledgerId = transaction.ledger_id;
 
     // Delete the transaction
     await trx ('transactions').where ('id', id).del ();
