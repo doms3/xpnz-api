@@ -11,7 +11,7 @@ const nanoid = customAlphabet (alphabet, 10);
 
 function makeLedgersTable (table) {
   table.string ('name').primary ();
-  table.enu ('default_currency', ['USD', 'EUR', 'CAD', 'PLN']);
+  table.enu ('currency', ['USD', 'EUR', 'CAD', 'PLN']);
 }
 
 function makeTransactionsTable (table) {
@@ -59,7 +59,7 @@ function reduceToObject (array, keyFunction, valueFunction) {
 }
 
 async function importTransactionsFromJsonFile (filename, ledgername) {
-  await db ('ledgers').insert ({ name: ledgername, default_currency: 'CAD' });
+  await db ('ledgers').insert ({ name: ledgername, currency: 'CAD' });
 
   var json = await fs.readFile (filename);
   var txs = parse (json).value;

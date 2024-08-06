@@ -516,11 +516,11 @@ async function ledgersPutHandler (request, reply) {
   const ledger = await db ('ledgers').where ('name', request.params.ledgerName).first ();
 
   if (ledger === undefined) {
-    await db ('ledgers').insert (_.pick (request.body, ['name', 'default_currency']));
+    await db ('ledgers').insert (_.pick (request.body, ['name', 'currency']));
     return reply.code (201).send ({ message: 'Ledger created successfully.' });
   }
 
-  await db ('ledgers').where ('name', request.params.ledgerName).update (_.pick (request.body, ['default_currency']));
+  await db ('ledgers').where ('name', request.params.ledgerName).update (_.pick (request.body, ['currency']));
   return reply.code (200).send ({ message: 'Ledger updated successfully.' });
 }
 
@@ -560,9 +560,9 @@ const transactionPostBodySchema = {
 
 const ledgersPutBodySchema = {
   type: 'object',
-  required: ['default_currency'],
+  required: ['currency'],
   properties: {
-    default_currency: { type: 'string', enum: ['CAD', 'USD', 'EUR', 'PLN'] }
+    currency: { type: 'string', enum: ['CAD', 'USD', 'EUR', 'PLN'] }
   },
   additionalProperties: false
 };
