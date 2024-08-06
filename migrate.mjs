@@ -3,8 +3,11 @@ import fs from 'fs/promises';
 import moment from 'moment';
 import parse from 'json-parse-safe';
 import path from 'path';
+import { customAlphabet } from 'nanoid';
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+const nanoid = customAlphabet (alphabet, 10);
 
 function makeLedgersTable (table) {
   table.increments ('id').primary ();
@@ -13,7 +16,7 @@ function makeLedgersTable (table) {
 }
 
 function makeTransactionsTable (table) {
-  table.increments ('id').primary ();
+  table.string ('id').primary ();
   table.string ('name');
   table.enu ('currency', ['USD', 'EUR', 'CAD', 'PLN']);
   table.string ('category');
@@ -34,7 +37,7 @@ function makeMembersTable (table) {
 
 function makeTransactionsMembersJunction (table) {
   table.increments ('id').primary ();
-  table.integer ('transaction_id').references ('id').inTable ('transactions');
+  table.string ('transaction_id').references ('id').inTable ('transactions');
   table.integer ('member_id').references ('id').inTable ('members');
   table.integer ('ledger_id').references ('id').inTable ('ledgers');
   table.integer ('amount'); // integer in cents
@@ -59,8 +62,6 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   var ledger_id = await db ('ledgers').insert ({ name: ledgername, default_currency: 'CAD' }).returning ('id').then (rows => rows[0].id);
   var json = await fs.readFile (filename);
   var txs = parse (json).value;
-
-  console.log (ledgername, txs);
 
   // return if txs is empty
   if (!txs) return;
@@ -117,10 +118,11 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
       tx.name = 'Unnamed transaction';
     }
 
+    tx.id = nanoid ();
+
     // delete extra keys from the transaction object
     delete tx.for;
     delete tx.by;
-    delete tx.id;
     delete tx.converted_total;
   }
 

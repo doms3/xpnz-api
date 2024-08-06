@@ -6,11 +6,14 @@ import Decimal from 'decimal.js';
 import seedrandom from 'seedrandom';
 import moment from 'moment';
 import got from 'got';
+import { customAlphabet } from 'nanoid';
 
 Decimal.set ({ rounding: Decimal.ROUND_HALF_EVEN });
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
 const app = Fastify ({ logger: true });
+const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+const nanoid = customAlphabet (alphabet, 10);
 
 async function membersGetHandler (request, reply) {
   const filters = _.pick (request.query, ['ledger', 'name', 'active']);
@@ -381,7 +384,10 @@ async function transactionsPutPostHandler (request, reply) {
           await trx ('transactions').where ('id', transaction.id).update (newTransaction);
           await trx ('transactions_member_junction').where ('transaction_id', transaction.id).del ();
         } else {
-          transaction.id = await trx ('transactions').insert (newTransaction).returning ('id').then (ids => ids[0].id);
+          transaction.id = nanoid ();
+          newTransaction.id = transaction.id;
+
+          await trx ('transactions').insert (newTransaction);
         }
 
         const transactionsMemberJunctionItems = transaction.memberIds.map ((memberId, index) => ({
@@ -611,8 +617,6 @@ app.put ('/transactions/:id', { schema: { body: transactionPostBodySchema } }, t
 app.get ('/ledgers/:ledgerName/categories', categoriesGetHandler);
 app.get ('/ledgers/:ledgerName/balance', balancesGetHandler);
 app.get ('/ledgers/:ledgerName/settlement', settlementsGetHandler);
-
-
 
 try {
   await app.listen({ port: 3000 })
