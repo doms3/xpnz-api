@@ -24,6 +24,7 @@ function makeTransactionsTable (table) {
   table.string ('expense_type');
   table.boolean ('recurring');
   table.string ('ledger').references ('name').inTable ('ledgers');
+  table.datetime ('created_at');
 }
 
 function makeMembersTable (table) {
@@ -104,7 +105,8 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   // clean up the rows for the transactions table
   for (var tx of txs) {
     // change date format from epoch to ISO
-    tx.date = moment.unix (Math.floor(tx.date / 1000)).format ('YYYY-MM-DD');
+    tx.created_at = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD HH:mm:ss');
+    tx.date = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD');
     
     tx.recurring = false; // reserve for future use
     tx.ledger = ledgername;

@@ -148,7 +148,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       'tm.weight',
       'tm.ledger'
     )
-    .orderBy ([{ column: 't.date', order: 'desc' }, { column: 't.id', order: 'desc' }])
+    .orderBy ([{ column: 't.date', order: 'desc' }, { column: 't.created_at', order: 'desc' }])
     .modify (builder => {
       if (filters.id) builder.where ('t.id', filters.id);
       if (filters.ledger) builder.where ('tm.ledger', filters.ledger);
@@ -368,8 +368,9 @@ async function transactionsPutPostHandler (request, reply) {
       } catch (error) {
         throw { status: 500, message: 'Internal server error: Unable to get exchange rates.' };
       }
-    }
 
+      newTransaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
+    }
    
     try {
       await db.transaction (async trx => {
