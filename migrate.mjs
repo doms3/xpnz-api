@@ -9,9 +9,9 @@ const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNu
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const nanoid = customAlphabet (alphabet, 10);
 
-function makeLedgersTable (table) {
-  table.string ('name').primary ();
-  table.enu ('currency', ['USD', 'EUR', 'CAD', 'PLN']);
+async function makeLedgersTable () {
+  await db.schema.raw ("CREATE TABLE `ledgers` (`name` varchar(255) collate nocase, primary key (`name`))")
+  await db.schema.table ('ledgers', table => { table.enu('currency', ['USD', 'EUR', 'CAD', 'PLN']); });
 }
 
 function makeTransactionsTable (table) {
@@ -27,11 +27,16 @@ function makeTransactionsTable (table) {
   table.datetime ('created_at');
 }
 
-function makeMembersTable (table) {
-  table.string ('name');
-  table.string ('ledger').references ('name').inTable ('ledgers');
-  table.boolean ('active');
-  table.primary (['name', 'ledger']);
+async function makeMembersTable () {
+  await db.schema.raw (`
+    CREATE TABLE \`members\` (
+      \`name\` varchar(255) collate nocase,
+      \`ledger\` varchar(255),
+      \`active\` boolean,
+      primary key (\`name\`, \`ledger\`),
+      foreign key (\`ledger\`) references \`ledgers\`(\`name\`)
+    );
+  `);
 }
 
 function makeTransactionsMembersJunction (table) {
@@ -45,9 +50,9 @@ function makeTransactionsMembersJunction (table) {
 }
 
 async function createTables () {
-  await db.schema.createTable ('ledgers', makeLedgersTable);
+  await makeLedgersTable ();
   await db.schema.createTable ('transactions', makeTransactionsTable);
-  await db.schema.createTable ('members', makeMembersTable);
+  await makeMembersTable ();
   await db.schema.createTable ('transactions_member_junction', makeTransactionsMembersJunction);
 }
 
