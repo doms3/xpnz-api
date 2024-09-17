@@ -5,8 +5,8 @@ import Decimal from 'decimal.js';
 
 import seedrandom from 'seedrandom';
 import moment from 'moment';
-import got from 'got';
 import { customAlphabet } from 'nanoid';
+import cors from '@fastify/cors';
 
 Decimal.set ({ rounding: Decimal.ROUND_HALF_EVEN });
 
@@ -14,6 +14,8 @@ const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNu
 const app = Fastify ({ logger: true });
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const nanoid = customAlphabet (alphabet, 10);
+
+app.register (cors, { origin: '*' });
 
 async function membersGetHandler (request, reply) {
   const filters = _.pick (request.query, ['ledger', 'name', 'active']);
@@ -24,11 +26,11 @@ async function membersGetHandler (request, reply) {
   const isRequestingSingleMember = request.params.memberName !== undefined && request.params.ledgerName !== undefined;
 
   const members = await db ('members')
-    .select ('members.name', 'members.ledger', 'members.active')
+    .select ('name', 'ledger', 'active')
     .modify (builder => {
-      if (filters.ledger) builder.where ('ledgers.name', filters.ledger);
-      if (filters.name) builder.where ('members.name', filters.name);
-      if (filters.active) builder.where ('members.active', filters.active);
+      if (filters.ledger) builder.where ('ledger', filters.ledger);
+      if (filters.name) builder.where ('name', filters.name);
+      if (filters.active) builder.where ('active', filters.active);
     })
     .then (members => members.map (member => ({ name: member.name, ledger: member.ledger, active: Boolean (member.active) })));
 
@@ -42,13 +44,24 @@ async function membersGetHandler (request, reply) {
 async function membersPutHandler (request, reply) {
   const { memberName, ledgerName } = request.params;
 
+  ledgerName = await db ('ledgers').where ({ name: ledgerName }).first ().then (ledger => ledger ? ledger.name : undefined);
 
-  if (await db ('ledgers').where ({ name: ledgerName }).first () === undefined) {
-    return reply.code (404).send ({ error: 'The specified ledger could not be found.' });
+  if (ledgerName === undefined) {
+    return reply.code (404).send ({ error: 'The specified resource could not be found.' });
   }
 
   // request.body is either {} or { active: true/false }, if its empty make it true
   const member = { name: memberName, ledger: ledgerName, active: request.body.active === undefined ? true : request.body.active };
+
+  // if request.body.name is present, and it matches the memberName (up to case), use it
+  if (request.body.name) {
+    if (request.body.name.toLowerCase () === memberName.toLowerCase ()) {
+      member.name = request.body.name;
+    } else {
+      // this is a malformed request, the memberName in the path does not match the member name in the object
+      return reply.code (400).send ({ error: 'The member name in the path does not match the member name in the object.' });
+    }
+  }
 
   try {
     await db.transaction (async trx => {
@@ -142,7 +155,6 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       't.date',
       't.exchange_rate',
       't.expense_type',
-      't.recurring',
       'tm.member',
       'tm.amount',
       'tm.weight',
@@ -156,7 +168,6 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       if (filters.category) builder.where ('t.category', filters.category);
       if (filters.currency) builder.where ('t.currency', filters.currency);
       if (filters.expense_type) builder.where ('t.expense_type', filters.expense_type);
-      if (filters.recurring) builder.where ('t.recurring', filters.recurring);
       if (filters.dateAfter) builder.where ('t.date', '>=', filters.dateAfter);
       if (filters.dateBefore) builder.where ('t.date', '<=', filters.dateBefore);
     });
@@ -172,8 +183,6 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     
     const multiplier = options.useExchangeRates ? transaction.exchange_rate : 1;
     const paid = transactions.map (t => new Decimal (t.amount).times (multiplier).round ().toNumber ());
-
-    transaction.recurring = Boolean (transaction.recurring);
 
     // Basic array format structure
     transaction.total = _(paid).sum ();
@@ -346,8 +355,8 @@ async function transactionsPutPostHandler (request, reply) {
     if (transaction.category) transaction.category = transaction.category.trim ();
     if (transaction.members) transaction.members = transaction.members.map (member => member.trim ());
     
-    if (transaction.name === "") delete transaction.name;
-    if (transaction.category === "") delete transaction.category;
+    if (transaction.name === "") transaction = _.omit (transaction, 'name');
+    if (transaction.category === "") transaction = _.omit (transaction, 'category');
 
     transaction.date = transaction.date || moment ().format ('YYYY-MM-DD');
 
@@ -355,15 +364,13 @@ async function transactionsPutPostHandler (request, reply) {
       transaction.paid = transaction.paid.map (amount => -amount);
     }
 
-    transaction.recurring = false; // reserved for future use
-
     await validateTransaction (transaction);
 
-    const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'recurring', 'ledger']);
+    const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'ledger']);
 
     if (request.params.id === undefined) {
       try {
-        const exchangeRates = await got ('https://open.er-api.com/v6/latest/CAD').json ();
+        const exchangeRates = await fetch ('https://open.er-api.com/v6/latest/CAD').json ();
         newTransaction.exchange_rate = 1 / exchangeRates.rates[transaction.currency];
       } catch (error) {
         throw { status: 500, message: 'Internal server error: Unable to get exchange rates.' };
@@ -553,7 +560,6 @@ const transactionPostBodySchema = {
     name: { type: 'string' },
     category: { type: 'string' },
     date: { type: 'string', format: 'date' },
-    recurring: { type: 'boolean' }
   },
   additionalProperties: false
 };
@@ -577,7 +583,6 @@ const transactionsGetQuerySchema = {
     currency: { type: 'string', enum: ['CAD', 'USD', 'EUR', 'PLN'] },
     date: { type: 'string', format: 'date' },
     expense_type: { type: 'string' },
-    recurring: { type: 'boolean' },
     dateAfter: { type: 'string', format: 'date' },
     dateBefore: { type: 'string', format: 'date' }
   },
@@ -618,10 +623,16 @@ app.get ('/ledgers/:ledgerName/categories', categoriesGetHandler);
 app.get ('/ledgers/:ledgerName/balance', balancesGetHandler);
 app.get ('/ledgers/:ledgerName/settlement', settlementsGetHandler);
 
+app.get ('/recurrences', recurrencesGetHandler);
+app.get ('/recurrences/:id', recurrencesGetHandler);
+app.post ('/recurrences', recurrencesPutPostHandler);
+app.delete ('/recurrences/:id', recurrencesDeleteHandler);
+app.put ('/recurrences/:id', recurrencesPutPostHandler);
+
 try {
-  await app.listen({ port: 3000 })
-} catch (err) {
-  app.log.error(err)
-  process.exit(1)
+  await app.listen ({ port: 3000 })
+} catch (error) {
+  app.log.error (error)
+  process.exit (1)
 }
 

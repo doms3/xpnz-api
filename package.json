@@ -1,8 +1,10 @@
 {
+  "type": "module",
   "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "date-fns": "^4.0.0",
     "decimal.js": "^10.4.3",
     "fastify": "^4.28.1",
-    "got": "^14.4.2",
     "json-parse-safe": "^2.0.0",
     "knex": "^3.1.0",
     "lodash": "^4.17.21",

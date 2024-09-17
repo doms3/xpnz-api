@@ -14,17 +14,35 @@ async function makeLedgersTable () {
   await db.schema.table ('ledgers', table => { table.enu('currency', ['USD', 'EUR', 'CAD', 'PLN']); });
 }
 
-function makeTransactionsTable (table) {
-  table.string ('id').primary ();
-  table.string ('name');
-  table.enu ('currency', ['USD', 'EUR', 'CAD', 'PLN']);
-  table.string ('category');
-  table.date ('date');
-  table.float ('exchange_rate');
-  table.string ('expense_type');
-  table.boolean ('recurring');
-  table.string ('ledger').references ('name').inTable ('ledgers');
-  table.datetime ('created_at');
+// Define common columns in a helper function
+function defineCommonColumns(table) {
+  table.string('id').primary();
+  table.string('name');
+  table.enu('currency', ['USD', 'EUR', 'CAD', 'PLN']);
+  table.string('category');
+  table.string('expense_type');
+  table.string('ledger').references('name').inTable('ledgers');
+  table.datetime('created_at');
+}
+
+// Create the Transactions table
+async function makeTransactionsTable() {
+  await db.schema.createTable('transactions', table => {
+    defineCommonColumns(table);
+    table.date('date');
+    table.float('exchange_rate');
+  });
+}
+
+// Create the Recurrences table
+async function makeRecurrencesTable() {
+  await db.schema.createTable('recurrences', table => {
+    defineCommonColumns(table);
+    table.date('start_date'); 
+    table.date('end_date');   
+    table.string('rrule');
+    table.string('last_created_id').references('id').inTable('transactions'); // for idempotency
+  });
 }
 
 async function makeMembersTable () {
@@ -51,9 +69,10 @@ function makeTransactionsMembersJunction (table) {
 
 async function createTables () {
   await makeLedgersTable ();
-  await db.schema.createTable ('transactions', makeTransactionsTable);
+  await makeTransactionsTable ();
   await makeMembersTable ();
   await db.schema.createTable ('transactions_member_junction', makeTransactionsMembersJunction);
+  await makeRecurrencesTable ();
 }
 
 function reduceToObject (array, keyFunction, valueFunction) {
@@ -116,7 +135,6 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     tx.created_at = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD HH:mm:ss');
     tx.date = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD');
     
-    tx.recurring = false; // reserve for future use
     tx.ledger = ledgername;
 
     if (tx.name === undefined || tx.name === null) tx.name = '';
@@ -134,6 +152,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     delete tx.for;
     delete tx.by;
     delete tx.converted_total;
+    delete tx.recurring;
   }
 
   var ids = [];
