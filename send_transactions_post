@@ -10,7 +10,6 @@ curl -X POST localhost:3000/transactions \
            "expense_type": "expense",
            "paid": [100, 200],
            "currency": "USD",
-           "recurring": false,
            "ledger": "trap2",
            "weights": [0.5, 0.5]
          }'

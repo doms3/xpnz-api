@@ -4,6 +4,7 @@ import moment from 'moment';
 import parse from 'json-parse-safe';
 import path from 'path';
 import { customAlphabet } from 'nanoid';
+import _ from 'lodash';
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -14,34 +15,28 @@ async function makeLedgersTable () {
   await db.schema.table ('ledgers', table => { table.enu('currency', ['USD', 'EUR', 'CAD', 'PLN']); });
 }
 
-// Define common columns in a helper function
-function defineCommonColumns(table) {
-  table.string('id').primary();
-  table.string('name');
-  table.enu('currency', ['USD', 'EUR', 'CAD', 'PLN']);
-  table.string('category');
-  table.string('expense_type');
-  table.string('ledger').references('name').inTable('ledgers');
-  table.datetime('created_at');
-}
-
-// Create the Transactions table
-async function makeTransactionsTable() {
-  await db.schema.createTable('transactions', table => {
-    defineCommonColumns(table);
-    table.date('date');
-    table.float('exchange_rate');
+async function makeTransactionsTable () {
+  await db.schema.createTable ('transactions', table => {
+    table.string ('id').primary ();
+    table.string ('name');
+    table.enu ('currency', ['USD', 'EUR', 'CAD', 'PLN']);
+    table.string ('category');
+    table.string ('expense_type');
+    table.string ('ledger').references ('name').inTable ('ledgers');
+    table.datetime ('created_at');
+    table.date ('date');
+    table.float ('exchange_rate');
+    table.boolean ('is_template');
+    table.boolean ('is_deleted');
   });
 }
 
-// Create the Recurrences table
-async function makeRecurrencesTable() {
-  await db.schema.createTable('recurrences', table => {
-    defineCommonColumns(table);
-    table.date('start_date'); 
-    table.date('end_date');   
-    table.string('rrule');
-    table.string('last_created_id').references('id').inTable('transactions'); // for idempotency
+async function makeRecurrencesTable () {
+  await db.schema.createTable ('recurrences', table => {
+    table.date ('date'); 
+    table.string ('rrule');
+    table.string ('template_id').references ('id').inTable ('transactions');
+    table.string ('last_created_id').references ('id').inTable ('transactions'); // for idempotency
   });
 }
 
@@ -136,6 +131,8 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     tx.date = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD');
     
     tx.ledger = ledgername;
+    tx.is_template = false;
+    tx.is_deleted = false;
 
     if (tx.name === undefined || tx.name === null) tx.name = '';
     if (tx.category === undefined || tx.category === null) tx.category = '';

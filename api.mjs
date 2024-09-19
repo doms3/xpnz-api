@@ -8,6 +8,12 @@ import moment from 'moment';
 import { customAlphabet } from 'nanoid';
 import cors from '@fastify/cors';
 
+import pkg from 'rrule';
+const { RRule, datetime } = pkg;
+
+// import node-cron
+import cron from 'node-cron';
+
 Decimal.set ({ rounding: Decimal.ROUND_HALF_EVEN });
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
@@ -162,6 +168,9 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     )
     .orderBy ([{ column: 't.date', order: 'desc' }, { column: 't.created_at', order: 'desc' }])
     .modify (builder => {
+      builder.where ('t.is_template', false);
+      builder.where ('t.is_deleted', false);
+
       if (filters.id) builder.where ('t.id', filters.id);
       if (filters.ledger) builder.where ('tm.ledger', filters.ledger);
       if (filters.name) builder.where ('t.name', filters.name);
@@ -185,28 +194,32 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     const paid = transactions.map (t => new Decimal (t.amount).times (multiplier).round ().toNumber ());
 
     // Basic array format structure
-    transaction.total = _(paid).sum ();
+    transaction.amount = _(paid).sum ();
     transaction.members = transactions.map (t => t.member);
     transaction.weights = transactions.map (t => t.weight);
     transaction.paid = paid;
-    transaction.owes = integerSplitByWeights (transaction.total, transaction.weights, transactions[0]);
+    transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transactions[0]);
+
+    const totalWeight = _.sum (transaction.weights);
+
+    transaction.normalizedWeights = transaction.weights.map (w => w / totalWeight);
 
     if (options.moneyFormat === 'dollars') {
         transaction.paid = transaction.paid.map (dollars);
         transaction.owes = transaction.owes.map (dollars);
-        transaction.total = dollars (transaction.total);
+        transaction.amount = dollars (transaction.amount);
     }
  
     if (options.format === 'array') return transaction;
 
     if (options.format === 'object') {
-      let member_contributions = transaction.members.map ((member, index) => ({ member, weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }));
-      return _.omit ({ ...transaction, member_contributions }, ['members', 'weights', 'paid', 'owes']);
+      const memberContributions = transaction.members.map ((member, index) => ({ member, weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index], normalized_weight: transaction.normalizedWeights[index] }));
+      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes', 'normalizedWeights']);
     }
 
     if (options.format === 'hash') {
-      let member_contributions = _ (transaction.members).map ((member, index) => [ member, { weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }]).fromPairs ().value ();
-      return _.omit ({ ...transaction, member_contributions }, ['members', 'weights', 'paid', 'owes']);
+      const memberContributions = _ (transaction.members).map ((member, index) => [ member, { weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index], normalized_weight: transaction.normalizedWeights[index] }]).fromPairs ().value ();
+      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes', 'normalizedWeights']);
     }
 
     throw new Error ('Invalid format.');
@@ -224,7 +237,7 @@ async function transactionsGetHandler (request, reply) {
       throw { status: 400, message: 'The "date" filter is not supported. Please use "dateAfter" and "dateBefore" instead.' };
     }
 
-    const transactions = await getTransactions (filters, { format: 'array', useExchangeRates: false, moneyFormat: 'dollars' });
+    const transactions = await getTransactions (filters, { format: 'object', useExchangeRates: false, moneyFormat: 'dollars' });
 
     if (request.params.id && transactions.length === 0) {
       throw { status: 404, message: 'Transaction not found.' };
@@ -276,7 +289,11 @@ async function categoriesGetHandler (request, reply) {
     return reply.code (404).send ({ error: 'The specified ledger does not exist.' });
   }
 
-  const payload = await db ('transactions').select ('category').where ('ledger', ledgerName).distinct ();
+  const payload = await db ('transactions').select ('category')
+    .where ('ledger', ledgerName)
+    .where ('is_template', false)
+    .where ('is_deleted', false)
+    .distinct ();
 
   const categories = payload.map (transaction => transaction.category).filter (category => category !== "");
   const allCategories = _.uniq ([ ...defaultCategories, ...categories ]);
@@ -300,8 +317,8 @@ async function balancesGetHandler (request, reply, options = { moneyFormat: 'dol
   const members = await db ('members').where ({ ledger: ledgerName }).select ('name').then (members => members.map (member => member.name));
 
   return members.map (member => {
-    const paid = _ (transactions).map (transaction => transaction.member_contributions[member] ? transaction.member_contributions[member].paid : 0).sum ();
-    const owes = _ (transactions).map (transaction => transaction.member_contributions[member] ? transaction.member_contributions[member].owes : 0).sum ();
+    const paid = _ (transactions).map (transaction => transaction.contributions[member] ? transaction.contributions[member].paid : 0).sum ();
+    const owes = _ (transactions).map (transaction => transaction.contributions[member] ? transaction.contributions[member].owes : 0).sum ();
 
     if (options.moneyFormat === 'dollars') {
       return { name: member, paid: dollars (paid), owes: dollars (owes), balance: dollars (paid - owes) };
@@ -339,6 +356,81 @@ async function settlementsGetHandler (request, reply) {
   // TODO: Find subgroups of zero sum transactions and settle them separately to reduce the number of transactions.
 }
 
+async function updateAddTransaction (transaction, isUpdate) {
+  if (transaction.name) transaction.name = transaction.name.trim ();
+  if (transaction.category) transaction.category = transaction.category.trim ();
+  if (transaction.members) transaction.members = transaction.members.map (member => member.trim ());
+  
+  if (transaction.name === "") transaction = _.omit (transaction, 'name');
+  if (transaction.category === "") transaction = _.omit (transaction, 'category');
+
+  transaction.date = transaction.date || moment ().format ('YYYY-MM-DD');
+
+  await validateTransaction (transaction);
+
+  if (transaction.expense_type === 'income') {
+    transaction.paid = transaction.paid.map (amount => -amount);
+  }
+
+  transaction.is_deleted = false;
+
+  const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'ledger', 'is_template', 'is_deleted']);
+
+  if (!isUpdate) {
+    try {
+      if (transaction.currency === 'CAD') {
+        newTransaction.exchange_rate = 1;
+      } else {
+        const exchangeRates = await fetch ('https://open.er-api.com/v6/latest/CAD').then (response => response.json ());
+        newTransaction.exchange_rate = 1 / exchangeRates.rates[transaction.currency];
+      }
+    } catch (error) {
+      throw new Error ('Internal server error: Unable to get exchange rates.');
+    }
+
+    newTransaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
+  }
+  
+  try {
+    await db.transaction (async trx => {
+      if (isUpdate) {
+        const is_deleted = await trx ('transactions').where ({ id: transaction.id }).select ('is_deleted').first ();
+
+        if (is_deleted === undefined) {
+          throw new Error ('The specified transaction does not exist.');
+        }
+
+        if (is_deleted.is_deleted === true) {
+          throw new Error ('The specified transaction has been deleted.');
+        }
+
+        await trx ('transactions').where ('id', transaction.id).update (newTransaction);
+        await trx ('transactions_member_junction').where ('transaction_id', transaction.id).del ();
+      } else {
+        transaction.id = nanoid ();
+        newTransaction.id = transaction.id;
+
+        await trx ('transactions').insert (newTransaction);
+      }
+
+      const transactionsMemberJunctionItems = transaction.members.map ((member, index) => ({
+        transaction_id: transaction.id,
+        member: member,
+        weight: transaction.weights[index],
+        amount: Math.floor (transaction.paid[index] * 100),
+        ledger: transaction.ledger
+      }));
+      
+      await trx ('transactions_member_junction').insert (transactionsMemberJunctionItems);
+    });
+  } catch (error) {
+    throw new Error ('Internal server error: Unable to insert transaction into the database.');
+  }
+
+  console.log (transaction.id);
+  return transaction.id;
+}
+
 async function transactionsPutPostHandler (request, reply) {
   try {
     if (request.params.id) {
@@ -347,68 +439,16 @@ async function transactionsPutPostHandler (request, reply) {
       if (previousTransaction === undefined) {
         throw { status: 404, message: 'Transaction not found. This API does not support creating new transactions with PUT requests, please use POST instead.' };
       }
-    }
 
-    let transaction = request.body;
-    
-    if (transaction.name) transaction.name = transaction.name.trim ();
-    if (transaction.category) transaction.category = transaction.category.trim ();
-    if (transaction.members) transaction.members = transaction.members.map (member => member.trim ());
-    
-    if (transaction.name === "") transaction = _.omit (transaction, 'name');
-    if (transaction.category === "") transaction = _.omit (transaction, 'category');
-
-    transaction.date = transaction.date || moment ().format ('YYYY-MM-DD');
-
-    if (transaction.expense_type === 'income') {
-      transaction.paid = transaction.paid.map (amount => -amount);
-    }
-
-    await validateTransaction (transaction);
-
-    const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'ledger']);
-
-    if (request.params.id === undefined) {
-      try {
-        const exchangeRates = await fetch ('https://open.er-api.com/v6/latest/CAD').json ();
-        newTransaction.exchange_rate = 1 / exchangeRates.rates[transaction.currency];
-      } catch (error) {
-        throw { status: 500, message: 'Internal server error: Unable to get exchange rates.' };
-      }
-
-      newTransaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
+      request.body.id = request.params.id;
     }
    
-    try {
-      await db.transaction (async trx => {
-        if (request.params.id) {
-          transaction.id = request.params.id;
-          
-          await trx ('transactions').where ('id', transaction.id).update (newTransaction);
-          await trx ('transactions_member_junction').where ('transaction_id', transaction.id).del ();
-        } else {
-          transaction.id = nanoid ();
-          newTransaction.id = transaction.id;
+    request.body.is_template = false;
 
-          await trx ('transactions').insert (newTransaction);
-        }
-
-        const transactionsMemberJunctionItems = transaction.members.map ((member, index) => ({
-          transaction_id: transaction.id,
-          member: member,
-          weight: transaction.weights[index],
-          amount: Math.floor (transaction.paid[index] * 100),
-          ledger: transaction.ledger
-        }));
-        
-        await trx ('transactions_member_junction').insert (transactionsMemberJunctionItems);
-      });
-    } catch (error) {
-      throw { status: 500, message: 'Internal server error: Unable to insert transaction into the database.' };
-    }
+    const id = await updateAddTransaction (request.body, request.params.id !== undefined);
 
     // Fetch and return the newly created transaction
-    const [newTransactionWithId] = await getTransactions ({ id: transaction.id });
+    const [newTransactionWithId] = await getTransactions ({ id });
    
     const status = request.params.id ? 200 : 201;
     const message = `Transaction ${request.params.id ? 'updated' : 'created'} successfully.`;
@@ -448,6 +488,15 @@ async function validateTransaction (transaction) {
     throw { status: 400, message: 'A transaction must have a name or a category.' };
   }
 
+  if (transaction.expense_type !== 'expense' && transaction.expense_type !== 'income' && transaction.expense_type !== 'transfer') {
+    throw { status: 400, message: 'The expense type must be either "expense", "income", or "transfer".' };
+  }
+
+  // All the transaction amounts should be positive
+  if (transaction.paid.some (amount => amount <= 0)) {
+    throw { status: 400, message: `All the ${transaction.expense_type === 'income' ? 'received' : 'paid'} amounts must be positive.` };
+  }
+
   // Get the members of the ledger
   const members = await db ('members')
     .where ('ledger', transaction.ledger)
@@ -473,6 +522,7 @@ async function ledgersDeleteHandler (request, reply) {
 
     // Delete all members and transactions associated with the ledger
     await trx ('members').where ('ledger', ledgerName).del ();
+    await trx ('recurrences').join ('transactions', 'recurrences.template_id', 'transactions.id').where ('transactions.ledger', ledgerName).del ();
     await trx ('transactions').where ('ledger', ledgerName).del ();
     await trx ('transactions_member_junction').where ('ledger', ledgerName).del ();
     await trx ('ledgers').where ('name', ledgerName).del ();
@@ -495,11 +545,13 @@ async function transactionsDeleteHandler (request, reply) {
       return;
     }
 
-    // Delete the transaction
-    await trx ('transactions').where ('id', id).del ();
+    if (transaction.is_template) {
+      reply.code (400).send ({ message: 'Templates cannot be deleted.' });
+      return;
+    }
 
-    // Delete the junction entries
-    await trx ('transactions_member_junction').where ('transaction_id', id).del ();
+    // Change transaction.is_deleted to true
+    await trx ('transactions').where ('id', id).update ('is_deleted', true);
 
     reply.code (200).send ({ message: 'Transaction deleted successfully.' });
   });
@@ -604,10 +656,49 @@ const membersGetResponseSchema = {
   items: membersGetResponseSchemaWithRoute
 }
 
+async function createRecurringTransactions () {
+  const recurrences = await db ('recurrences').join ('transactions', 'recurrences.template_id', 'transactions.id').leftJoin ('transactions as last_transaction', 'recurrences.last_created_id', 'last_transaction.id').select ('recurrences.*', 'transactions.*', 'last_transaction.date as last_date');
+
+  for (const recurrence of recurrences) {
+    const rule = RRule.fromString (recurrence.rrule);
+ 
+    const lastDate = (() => {
+      let d = moment (recurrence.last_date ? recurrence.last_date : recurrence.date);
+      d.add (1, 'day');
+      return d.toDate ();
+    }) ();
+
+
+    const dates = rule.between (lastDate, moment ());
+
+    const transactions = dates.map (date => {
+      const transaction = _.pick (recurrence, ['name', 'currency', 'category', 'expense_type', 'ledger']);
+     
+      transaction.id = nanoid ();
+      transaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
+      transaction.date = moment (date).format ('YYYY-MM-DD');
+      transaction.exchange_rate = 1; // TODO: implement exchange rates
+      transaction.is_templete = false;
+      transaction.is_deleted = false;
+
+      return transaction;
+    });
+
+    const ids = await db ('transactions').insert (transactions).returning ('id');
+
+    const transactionMemberJunctions = await db ('transaction_member_junction').where ('transaction_id', recurrence.template_id).select ();
+    const newTransactionMemberJunctions = ids.map (id => transactionMemberJunctions.map (junction => ({ transaction_id: id, member: junction.member, weight: junction.weight, amount: junction.amount, ledger: junction.ledger }))).flat ();
+  
+    await db ('transaction_member_junction').insert (newTransactionMemberJunctions);
+  }
+}
+
+// cron.schedule ('0 0 * * *', createRecurringTransactions);
+
 app.get ('/ledgers', ledgersGetHandler);
 app.get ('/ledgers/:ledgerName', ledgersGetHandlerWithRoute);
 app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, ledgersPutHandler);
-app.delete ('/ledgers/:ledgerName', ledgersDeleteHandler);
+// app.delete ('/ledgers/:ledgerName', ledgersDeleteHandler);
 
 app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
 app.get ('/members/:ledgerName/:memberName', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
@@ -623,16 +714,20 @@ app.get ('/ledgers/:ledgerName/categories', categoriesGetHandler);
 app.get ('/ledgers/:ledgerName/balance', balancesGetHandler);
 app.get ('/ledgers/:ledgerName/settlement', settlementsGetHandler);
 
-app.get ('/recurrences', recurrencesGetHandler);
-app.get ('/recurrences/:id', recurrencesGetHandler);
-app.post ('/recurrences', recurrencesPutPostHandler);
-app.delete ('/recurrences/:id', recurrencesDeleteHandler);
-app.put ('/recurrences/:id', recurrencesPutPostHandler);
+// app.get ('/recurrences', recurrencesGetHandler);
+// app.get ('/recurrences/:id', recurrencesGetHandler);
+// app.post ('/recurrences', recurrencesPutPostHandler);
+// app.delete ('/recurrences/:id', recurrencesDeleteHandler);
+// app.put ('/recurrences/:id', recurrencesPutPostHandler);
 
-try {
-  await app.listen ({ port: 3000 })
-} catch (error) {
-  app.log.error (error)
-  process.exit (1)
+
+const start = async () => {
+  try {
+    await app.listen ({ port: 3001 })
+  } catch (error) {
+    app.log.error (error)
+    process.exit (1)
+  }
 }
 
+start ();
