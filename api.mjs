@@ -331,8 +331,8 @@ async function balancesGetHandler (request, reply, options = { moneyFormat: 'dol
   const members = await db ('members').where ({ ledger: ledgerName }).select ('name').then (members => members.map (member => member.name));
 
   return members.map (member => {
-    const paid = _ (transactions).map (transaction => transaction.contributions[member] ? transaction.contributions[member].paid : 0).sum ();
-    const owes = _ (transactions).map (transaction => transaction.contributions[member] ? transaction.contributions[member].owes : 0).sum ();
+    const paid = _ (transactions).map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].paid : transaction.contributions[member].paid) : 0).sum ();
+    const owes = _ (transactions).map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].owes : transaction.contributions[member].owes) : 0).sum ();
 
     if (options.moneyFormat === 'dollars') {
       return { name: member, paid: dollars (paid), owes: dollars (owes), balance: dollars (paid - owes) };
@@ -382,9 +382,9 @@ async function updateAddTransaction (transaction, isUpdate) {
 
   await validateTransaction (transaction);
 
-  if (transaction.expense_type === 'income') {
-    transaction.paid = transaction.paid.map (amount => -amount);
-  }
+  // if (transaction.expense_type === 'income') {
+  //  transaction.paid = transaction.paid.map (amount => -amount);
+  // }
 
   transaction.is_deleted = false;
 

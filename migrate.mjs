@@ -111,7 +111,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
     var transactionMemberPairs = reduceToObject (members, name => name, name => ({ member: name, amount: 0, weight: 0, ledger: ledgername }));
 
     tx.for.members.forEach ((name, index) => transactionMemberPairs[name].weight = tx.for.split_weights[index]);
-    tx.by.members.forEach ((name, index) => transactionMemberPairs[name].amount = Math.floor (tx.by.split_values[index] * 100)); // convert to cents
+    tx.by.members.forEach ((name, index) => transactionMemberPairs[name].amount = Math.floor (Math.abs(tx.by.split_values[index]) * 100)); // convert to cents
 
     transactionMemberPairs = Object.values (transactionMemberPairs);
 
