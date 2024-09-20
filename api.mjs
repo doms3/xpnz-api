@@ -194,9 +194,9 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       if (filters.name) builder.where ('t.name', filters.name);
       if (filters.category) builder.where ('t.category', filters.category);
       if (filters.currency) builder.where ('t.currency', filters.currency);
-      if (filters.expense_type) builder.where ('t.expense_type', filters.expense_type);
-      if (filters.dateAfter) builder.where ('t.date', '>=', filters.dateAfter);
-      if (filters.dateBefore) builder.where ('t.date', '<=', filters.dateBefore);
+      if (filters.expensetype) builder.where ('t.expense_type', filters.expensetype);
+      if (filters.dateafter) builder.where ('t.date', '>=', filters.dateafter);
+      if (filters.datebefore) builder.where ('t.date', '<=', filters.datebefore);
     });
 
   const payload = await query;
@@ -218,10 +218,6 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     transaction.paid = paid;
     transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transactions[0]);
 
-    const totalWeight = _.sum (transaction.weights);
-
-    transaction.normalizedWeights = transaction.weights.map (w => w / totalWeight);
-
     if (options.moneyFormat === 'dollars') {
         transaction.paid = transaction.paid.map (dollars);
         transaction.owes = transaction.owes.map (dollars);
@@ -231,13 +227,13 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     if (options.format === 'array') return transaction;
 
     if (options.format === 'object') {
-      const memberContributions = transaction.members.map ((member, index) => ({ member, weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index], normalized_weight: transaction.normalizedWeights[index] }));
-      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes', 'normalizedWeights']);
+      const memberContributions = transaction.members.map ((member, index) => ({ member, weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }));
+      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
     }
 
     if (options.format === 'hash') {
-      const memberContributions = _ (transaction.members).map ((member, index) => [ member, { weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index], normalized_weight: transaction.normalizedWeights[index] }]).fromPairs ().value ();
-      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes', 'normalizedWeights']);
+      const memberContributions = _ (transaction.members).map ((member, index) => [ member, { weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }]).fromPairs ().value ();
+      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
     }
 
     throw new Error ('Invalid format.');
@@ -646,7 +642,7 @@ const ledgersPutBodySchema = {
 const transactionsGetQuerySchema = {
   type: 'object',
   properties: {
-    id: { type: 'integer' },
+    id: { type: 'string' },
     ledger: { type: 'string' },
     name: { type: 'string' },
     category: { type: 'string' },
