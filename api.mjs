@@ -68,9 +68,9 @@ async function membersGetHandler (request, reply) {
 async function membersPutHandler (request, reply) {
   const { memberName, ledgerName } = request.params;
 
-  ledgerName = await db ('ledgers').where ({ name: ledgerName }).first ().then (ledger => ledger ? ledger.name : undefined);
+  const resolvedLedgerName = await db ('ledgers').where ({ name: ledgerName }).first ().then (ledger => ledger ? ledger.name : undefined);
 
-  if (ledgerName === undefined) {
+  if (resolvedLedgerName === undefined) {
     return reply.code (404).send ({ error: 'The specified resource could not be found.' });
   }
 
