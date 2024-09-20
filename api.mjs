@@ -248,7 +248,7 @@ async function transactionsGetHandler (request, reply) {
 
   try {
     if (filters.date) {
-      throw { status: 400, message: 'The "date" filter is not supported. Please use "dateAfter" and "dateBefore" instead.' };
+      throw { status: 400, message: 'The "date" filter is not supported. Please use "dateafter" and "datebefore" instead.' };
     }
 
     const transactions = await getTransactions (filters, { format: 'object', useExchangeRates: false, moneyFormat: 'dollars' });
@@ -648,9 +648,9 @@ const transactionsGetQuerySchema = {
     category: { type: 'string' },
     currency: { type: 'string', enum: ['CAD', 'USD', 'EUR', 'PLN'] },
     date: { type: 'string', format: 'date' },
-    expense_type: { type: 'string' },
-    dateAfter: { type: 'string', format: 'date' },
-    dateBefore: { type: 'string', format: 'date' }
+    expensetype: { type: 'string' },
+    dateafter: { type: 'string', format: 'date' },
+    datebefore: { type: 'string', format: 'date' }
   },
   additionalProperties: false
 };
