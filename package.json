@@ -1,5 +1,10 @@
 {
   "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "migrate": "node scripts/migrate.js"
+  },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
     "date-fns": "^4.0.0",
@@ -13,5 +18,8 @@
     "rrule": "^2.8.1",
     "seedrandom": "^3.0.5",
     "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
   }
 }
