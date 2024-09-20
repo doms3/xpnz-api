@@ -14,6 +14,8 @@ const { RRule, datetime } = pkg;
 // import node-cron
 import cron from 'node-cron';
 
+import { getDateString, getDateTimeString } from './common.mjs';
+
 Decimal.set ({ rounding: Decimal.ROUND_HALF_EVEN });
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
@@ -23,23 +25,6 @@ const nanoid = customAlphabet (alphabet, 10);
 
 app.register (cors, { origin: '*' });
 
-function getDateString (date) {
-  if (date === undefined) {
-    date = new Date ();
-  }
-
-  // convert to YYYY-MM-DD
-  return date.toISOString ().split ('T')[0];
-}
-
-function getDateTimeString (date) {
-  if (date === undefined) {
-    date = new Date ();
-  }
-
-  // convert to YYYY-MM-DD HH:mm:ss
-  return date.toISOString ().split ('.')[0];
-}
 
 async function membersGetHandler (request, reply) {
   const filters = _.pick (request.query, ['ledger', 'name', 'active']);

@@ -1,6 +1,5 @@
 import Knex from 'knex';
 import fs from 'fs/promises';
-import moment from 'moment';
 import parse from 'json-parse-safe';
 import path from 'path';
 import { customAlphabet } from 'nanoid';
@@ -9,6 +8,8 @@ import _ from 'lodash';
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const nanoid = customAlphabet (alphabet, 10);
+
+import { getDateString, getDateTimeString } from './common.mjs';
 
 async function makeLedgersTable () {
   await db.schema.raw ("CREATE TABLE `ledgers` (`name` varchar(255) collate nocase, primary key (`name`))")
@@ -127,9 +128,9 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   // clean up the rows for the transactions table
   for (var tx of txs) {
     // change date format from epoch to ISO
-    tx.created_at = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD HH:mm:ss');
-    tx.date = moment.unix (Math.floor (tx.date / 1000)).format ('YYYY-MM-DD');
-    
+    tx.created_at = getDateTimeString (new Date (tx.date));
+    tx.date = getDateString (new Date (tx.date));
+
     tx.ledger = ledgername;
     tx.is_template = false;
     tx.is_deleted = false;
