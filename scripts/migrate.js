@@ -9,7 +9,7 @@ const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNu
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const nanoid = customAlphabet (alphabet, 10);
 
-import { getDateString, getDateTimeString } from './common.mjs';
+import { getDateString, getDateTimeString } from '../src/utilities.js';
 
 async function makeLedgersTable () {
   await db.schema.raw ("CREATE TABLE `ledgers` (`name` varchar(255) collate nocase, primary key (`name`))")
@@ -34,7 +34,7 @@ async function makeTransactionsTable () {
 
 async function makeRecurrencesTable () {
   await db.schema.createTable ('recurrences', table => {
-    table.date ('date'); 
+    table.string ('id').primary ();
     table.string ('rrule');
     table.string ('template_id').references ('id').inTable ('transactions');
     table.string ('last_created_id').references ('id').inTable ('transactions'); // for idempotency
