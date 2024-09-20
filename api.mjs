@@ -4,7 +4,7 @@ import _ from 'lodash';
 import Decimal from 'decimal.js';
 
 import seedrandom from 'seedrandom';
-import moment from 'moment';
+// import moment from 'moment';
 import { customAlphabet } from 'nanoid';
 import cors from '@fastify/cors';
 
@@ -22,6 +22,24 @@ const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 const nanoid = customAlphabet (alphabet, 10);
 
 app.register (cors, { origin: '*' });
+
+function getDateString (date) {
+  if (date === undefined) {
+    date = new Date ();
+  }
+
+  // convert to YYYY-MM-DD
+  return date.toISOString ().split ('T')[0];
+}
+
+function getDateTimeString (date) {
+  if (date === undefined) {
+    date = new Date ();
+  }
+
+  // convert to YYYY-MM-DD HH:mm:ss
+  return date.toISOString ().split ('.')[0];
+}
 
 async function membersGetHandler (request, reply) {
   const filters = _.pick (request.query, ['ledger', 'name', 'active']);
@@ -364,7 +382,7 @@ async function updateAddTransaction (transaction, isUpdate) {
   if (transaction.name === "") transaction = _.omit (transaction, 'name');
   if (transaction.category === "") transaction = _.omit (transaction, 'category');
 
-  transaction.date = transaction.date || moment ().format ('YYYY-MM-DD');
+  transaction.date = transaction.date || getDateString ();
 
   await validateTransaction (transaction);
 
@@ -388,7 +406,7 @@ async function updateAddTransaction (transaction, isUpdate) {
       throw new Error ('Internal server error: Unable to get exchange rates.');
     }
 
-    newTransaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
+    newTransaction.created_at = getDateTimeString ();
   }
   
   try {
@@ -657,39 +675,79 @@ const membersGetResponseSchema = {
 }
 
 async function createRecurringTransactions () {
-  const recurrences = await db ('recurrences').join ('transactions', 'recurrences.template_id', 'transactions.id').leftJoin ('transactions as last_transaction', 'recurrences.last_created_id', 'last_transaction.id').select ('recurrences.*', 'transactions.*', 'last_transaction.date as last_date');
+  const recurrences = await db ('recurrences')
+    .join ('transactions', 'recurrences.template_id', 'transactions.id')
+    .leftJoin ('transactions as last_transaction', 'recurrences.last_created_id', 'last_transaction.id')
+    .select ('recurrences.*', 'transactions.*', 'last_transaction.date as last_date');
 
   for (const recurrence of recurrences) {
     const rule = RRule.fromString (recurrence.rrule);
- 
-    const lastDate = (() => {
-      let d = moment (recurrence.last_date ? recurrence.last_date : recurrence.date);
-      d.add (1, 'day');
-      return d.toDate ();
-    }) ();
 
+    const baseDate = new Date (recurrence.last_date || recurrence.date);
+    const lastDate = new Date (baseDate);
+    lastDate.setDate (baseDate.getDate () + 1);
 
-    const dates = rule.between (lastDate, moment ());
+    const now = new Date ();
+    const dates = rule.between (lastDate, now);
+
+    if (dates.length === 0) {
+      continue;
+    }
 
     const transactions = dates.map (date => {
-      const transaction = _.pick (recurrence, ['name', 'currency', 'category', 'expense_type', 'ledger']);
-     
+      const transaction = _.pick (recurrence, [
+        'name',
+        'currency',
+        'category',
+        'expense_type',
+        'ledger',
+      ]);
+
       transaction.id = nanoid ();
-      transaction.created_at = moment ().format ('YYYY-MM-DD HH:mm:ss');
-      transaction.date = moment (date).format ('YYYY-MM-DD');
+      transaction.created_at = getDateTimeString ();
+      transaction.date = getDateString (date);
       transaction.exchange_rate = 1; // TODO: implement exchange rates
-      transaction.is_templete = false;
+      transaction.is_template = false;
       transaction.is_deleted = false;
 
       return transaction;
     });
 
-    const ids = await db ('transactions').insert (transactions).returning ('id');
+    // Perform database operations in a transaction
+    try {
+      await db.transaction (async trx => {
+        const ids = await trx ('transactions')
+          .insert (transactions)
+          .returning ('id');
 
-    const transactionMemberJunctions = await db ('transaction_member_junction').where ('transaction_id', recurrence.template_id).select ();
-    const newTransactionMemberJunctions = ids.map (id => transactionMemberJunctions.map (junction => ({ transaction_id: id, member: junction.member, weight: junction.weight, amount: junction.amount, ledger: junction.ledger }))).flat ();
-  
-    await db ('transaction_member_junction').insert (newTransactionMemberJunctions);
+        const transactionMemberJunctions = await trx ('transaction_member_junction')
+          .where ('transaction_id', recurrence.template_id)
+          .select ();
+
+        const newTransactionMemberJunctions = ids
+          .map (id =>
+            transactionMemberJunctions.map (junction => ({
+              transaction_id: id,
+              member: junction.member,
+              weight: junction.weight,
+              amount: junction.amount,
+              ledger: junction.ledger,
+            }))
+          )
+          .flat ();
+
+        await trx ('transaction_member_junction').insert (newTransactionMemberJunctions);
+
+        // Update last_created_id
+        const lastCreatedId = ids[ids.length - 1];
+        await trx ('recurrences')
+          .where ('id', recurrence.id)
+          .update ({ last_created_id: lastCreatedId });
+      });
+    } catch (error) {
+      console.error (`Failed to process recurrence - ${recurrence.id}:`, error);
+      // Optionally, handle the error or rethrow
+    }
   }
 }
 
