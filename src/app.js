@@ -1,33 +1,23 @@
 import Fastify from 'fastify';
 import Knex from 'knex';
-import _ from 'lodash';
-import Decimal from 'decimal.js';
+import Lodash from 'lodash';
+import RRuleModule from 'rrule';
 
-import seedrandom from 'seedrandom';
-// import moment from 'moment';
-import { customAlphabet } from 'nanoid';
+const { sum, uniq, omit, pick, groupBy, fromPairs } = Lodash;
+const { RRule, datetime } = RRuleModule;
+
 import cors from '@fastify/cors';
-
-import pkg from 'rrule';
-const { RRule, datetime } = pkg;
-
-// import node-cron
 import cron from 'node-cron';
 
-import { getDateString, getDateTimeString } from './utilities.js';
-
-Decimal.set ({ rounding: Decimal.ROUND_HALF_EVEN });
+import { getDateString, getDateTimeString, generateId, integerSplitByWeights, integerMultiplyByFloat, integerCentsToDollars } from './utilities.js';
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
 const app = Fastify ({ logger: true });
-const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const nanoid = customAlphabet (alphabet, 10);
 
 app.register (cors, { origin: '*' });
 
-
 async function membersGetHandler (request, reply) {
-  const filters = _.pick (request.query, ['ledger', 'name', 'active']);
+  const filters = pick (request.query, ['ledger', 'name', 'active']);
 
   if (request.params.ledgerName) filters.ledger = request.params.ledgerName;
   if (request.params.memberName) filters.name = request.params.memberName;
@@ -89,66 +79,6 @@ async function membersPutHandler (request, reply) {
   }
 }
 
-function shuffle (array, random) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(random () * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
-
-function integerSplitByWeights (totalAmount, weights, seed) {
-  if (seed === undefined) {
-    seed = totalAmount;
-  }
-
-  const random = seedrandom (seed);
-  const totalWeight = _.sum (weights);
-  const rawShares = weights.map (weight => (weight / totalWeight) * totalAmount);
-
-  // Initial rounding down of each share
-  const flooredShares = rawShares.map (Math.floor);
-  const flooredTotal = _.sum (flooredShares);
-
-  // Calculate the remainder to distribute
-  let remainder = totalAmount - flooredTotal;
-
-  // Create a pseudo-random but deterministic order using the Fisher-Yates shuffle
-  const result = [...flooredShares];
-  const indices = weights.map ((_, index) => index);
-  
-  shuffle (indices, random);
-
-  // If all the results are zero, just distribute the remainder normally
-  if (flooredTotal === 0) {
-    for (let i = 0; remainder > 0; i = (i + 1) % indices.length) {
-      result[indices[i]]++;
-      remainder--;
-    }
-  
-  }
-  // Otherwise, distribute the remainder only to the non-zero shares
-  else {
-    for (let i = 0; remainder > 0; i = (i + 1) % indices.length) {
-      if (result[indices[i]] != 0) {
-        result[indices[i]]++;
-        remainder--;
-      }
-
-      if (result.every (share => share === 0)) {
-        throw new Error ('Assertion failed: all shares are zero.');
-      }
-    }
-  }
-
-  return result;
-}
-
-function dollars (cents) {
-  return new Decimal (cents).dividedBy (100).toNumber ();
-}
-
-
 async function getTransactions (filters, options = { format: 'array', useExchangeRates: false, moneyFormat: 'dollars' }) {
   if (options.moneyFormat !== 'dollars' && options.moneyFormat !== 'cents') {
     throw new Error ('Invalid money format.');
@@ -186,39 +116,40 @@ async function getTransactions (filters, options = { format: 'array', useExchang
 
   const payload = await query;
 
-  const uniqueIds = _.uniq (payload.map (transaction => transaction.id));
-  const groupedTransactions = _.groupBy (payload, 'id');
+  const uniqueIds = uniq (payload.map (transaction => transaction.id));
+  const groupedTransactions = groupBy (payload, 'id');
   const transactionsRaw = uniqueIds.map (id => groupedTransactions[id]);
 
   const transactions = transactionsRaw.map (transactions => {
-    let transaction = _.omit (transactions[0], ['member', 'amount', 'weight']);
+    let transaction = omit (transactions[0], ['member', 'amount', 'weight']);
     
     const multiplier = options.useExchangeRates ? transaction.exchange_rate : 1;
-    const paid = transactions.map (t => new Decimal (t.amount).times (multiplier).round ().toNumber ());
+    const paid = transactions.map (({amount}) => integerMultiplyByFloat (amount, multiplier));
 
     // Basic array format structure
-    transaction.amount = _(paid).sum ();
+    transaction.amount = sum (paid);
     transaction.members = transactions.map (t => t.member);
     transaction.weights = transactions.map (t => t.weight);
     transaction.paid = paid;
     transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transactions[0]);
 
     if (options.moneyFormat === 'dollars') {
-        transaction.paid = transaction.paid.map (dollars);
-        transaction.owes = transaction.owes.map (dollars);
-        transaction.amount = dollars (transaction.amount);
+        transaction.paid = transaction.paid.map (integerCentsToDollars);
+        transaction.owes = transaction.owes.map (integerCentsToDollars);
+        transaction.amount = integerCentsToDollars (transaction.amount);
     }
  
     if (options.format === 'array') return transaction;
 
     if (options.format === 'object') {
-      const memberContributions = transaction.members.map ((member, index) => ({ member, weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }));
-      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
+      const memberContributions = transaction.members.map ((m, i) => ({ member: m, weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }));
+      return omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
     }
 
     if (options.format === 'hash') {
-      const memberContributions = _ (transaction.members).map ((member, index) => [ member, { weight: transaction.weights[index], paid: transaction.paid[index], owes: transaction.owes[index] }]).fromPairs ().value ();
-      return _.omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
+      const memberContributions = transaction.members.map ((m, i) => [ m, { weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }]);
+
+      return omit ({ ...transaction, contributions: fromPairs (memberContributions) }, ['members', 'weights', 'paid', 'owes']);
     }
 
     throw new Error ('Invalid format.');
@@ -295,7 +226,7 @@ async function categoriesGetHandler (request, reply) {
     .distinct ();
 
   const categories = payload.map (transaction => transaction.category).filter (category => category !== "");
-  const allCategories = _.uniq ([ ...defaultCategories, ...categories ]);
+  const allCategories = uniq ([ ...defaultCategories, ...categories ]);
 
   return allCategories;
 }
@@ -316,11 +247,11 @@ async function balancesGetHandler (request, reply, options = { moneyFormat: 'dol
   const members = await db ('members').where ({ ledger: ledgerName }).select ('name').then (members => members.map (member => member.name));
 
   return members.map (member => {
-    const paid = _ (transactions).map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].paid : transaction.contributions[member].paid) : 0).sum ();
-    const owes = _ (transactions).map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].owes : transaction.contributions[member].owes) : 0).sum ();
+    const paid = sum (transactions.map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].paid : transaction.contributions[member].paid) : 0));
+    const owes = sum (transactions.map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].owes : transaction.contributions[member].owes) : 0));
 
     if (options.moneyFormat === 'dollars') {
-      return { name: member, paid: dollars (paid), owes: dollars (owes), balance: dollars (paid - owes) };
+      return { name: member, paid: integerCentsToDollars (paid), owes: integerCentsToDollars (owes), balance: integerCentsToDollars (paid - owes) };
     } else {
       return { name: member, paid, owes, balance: paid - owes };
     }
@@ -350,7 +281,7 @@ async function settlementsGetHandler (request, reply) {
     if (payer.balance === 0) balances.pop ();
   }
 
-  return settlements.map (settlement => { return { payer: settlement.payer, payee: settlement.payee, amount: dollars (settlement.amount) } });
+  return settlements.map (settlement => { return { payer: settlement.payer, payee: settlement.payee, amount: integerCentsToDollars (settlement.amount) } });
 
   // TODO: Find subgroups of zero sum transactions and settle them separately to reduce the number of transactions.
 }
@@ -360,8 +291,8 @@ async function updateAddTransaction (transaction, isUpdate) {
   if (transaction.category) transaction.category = transaction.category.trim ();
   if (transaction.members) transaction.members = transaction.members.map (member => member.trim ());
   
-  if (transaction.name === "") transaction = _.omit (transaction, 'name');
-  if (transaction.category === "") transaction = _.omit (transaction, 'category');
+  if (transaction.name === "") transaction = omit (transaction, 'name');
+  if (transaction.category === "") transaction = omit (transaction, 'category');
 
   transaction.date = transaction.date || getDateString ();
 
@@ -373,7 +304,7 @@ async function updateAddTransaction (transaction, isUpdate) {
 
   transaction.is_deleted = false;
 
-  const newTransaction = _.pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'ledger', 'is_template', 'is_deleted']);
+  const newTransaction = pick (transaction, ['name', 'currency', 'category', 'date', 'expense_type', 'ledger', 'is_template', 'is_deleted']);
 
   if (!isUpdate) {
     try {
@@ -406,7 +337,7 @@ async function updateAddTransaction (transaction, isUpdate) {
         await trx ('transactions').where ('id', transaction.id).update (newTransaction);
         await trx ('transactions_member_junction').where ('transaction_id', transaction.id).del ();
       } else {
-        transaction.id = nanoid ();
+        transaction.id = generateId ();
         newTransaction.id = transaction.id;
 
         await trx ('transactions').insert (newTransaction);
@@ -476,7 +407,7 @@ async function validateTransaction (transaction) {
     throw { status: 400, message: 'The number of members, weights, and paid amounts must be the same.' };
   }
   
-  if (_.uniq (transaction.members).length !== transaction.members.length) {
+  if (uniq (transaction.members).length !== transaction.members.length) {
     throw { status: 400, message: 'Members must be unique.' };
   }
   
@@ -574,11 +505,11 @@ async function ledgersPutHandler (request, reply) {
   const ledger = await db ('ledgers').where ('name', request.params.ledgerName).first ();
 
   if (ledger === undefined) {
-    await db ('ledgers').insert (_.pick (request.body, ['name', 'currency']));
+    await db ('ledgers').insert (pick (request.body, ['name', 'currency']));
     return reply.code (201).send ({ message: 'Ledger created successfully.' });
   }
 
-  await db ('ledgers').where ('name', request.params.ledgerName).update (_.pick (request.body, ['currency']));
+  await db ('ledgers').where ('name', request.params.ledgerName).update (pick (request.body, ['currency']));
   return reply.code (200).send ({ message: 'Ledger updated successfully.' });
 }
 
@@ -676,7 +607,7 @@ async function createRecurringTransactions () {
     }
 
     const transactions = dates.map (date => {
-      const transaction = _.pick (recurrence, [
+      const transaction = pick (recurrence, [
         'name',
         'currency',
         'category',
@@ -684,7 +615,7 @@ async function createRecurringTransactions () {
         'ledger',
       ]);
 
-      transaction.id = nanoid ();
+      transaction.id = generateId ();
       transaction.created_at = getDateTimeString ();
       transaction.date = getDateString (date);
       transaction.exchange_rate = 1; // TODO: implement exchange rates

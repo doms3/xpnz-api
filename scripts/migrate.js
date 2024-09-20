@@ -2,14 +2,11 @@ import Knex from 'knex';
 import fs from 'fs/promises';
 import parse from 'json-parse-safe';
 import path from 'path';
-import { customAlphabet } from 'nanoid';
 import _ from 'lodash';
 
 const db = Knex ({ client: 'sqlite3', connection: { filename: 'data.db' }, useNullAsDefault: true });
-const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const nanoid = customAlphabet (alphabet, 10);
 
-import { getDateString, getDateTimeString } from '../src/utilities.js';
+import { getDateString, getDateTimeString, generateId } from '../src/utilities.js';
 
 async function makeLedgersTable () {
   await db.schema.raw ("CREATE TABLE `ledgers` (`name` varchar(255) collate nocase, primary key (`name`))")
@@ -144,7 +141,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
 
     if (tx.category === '❓Misc') tx.category = '❓ Miscellaneous';
 
-    tx.id = nanoid ();
+    tx.id = generateId ();
 
     // delete extra keys from the transaction object
     delete tx.for;
