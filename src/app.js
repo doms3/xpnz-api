@@ -491,8 +491,8 @@ async function validateTransaction (transaction) {
   }
 
   // All the transaction amounts should be positive
-  if (transaction.paid.some (amount => amount <= 0)) {
-    throw { status: 400, message: `All the ${transaction.expense_type === 'income' ? 'received' : 'paid'} amounts must be positive.` };
+  if (transaction.paid.some (amount => amount < 0)) {
+    throw { status: 400, message: `All the ${transaction.expense_type === 'income' ? 'received' : 'paid'} amounts must be non-negative.` };
   }
 
   // Get the members of the ledger
