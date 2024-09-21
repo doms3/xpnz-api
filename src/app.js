@@ -75,12 +75,13 @@ async function membersPutHandler (request, reply) {
   }
 }
 
-async function getTransactions (filters, options = { format: 'array', useExchangeRates: false, moneyFormat: 'dollars' }) {
+
+async function getTransactions (filters, options = { format: 'array', useExchangeRates: false, moneyFormat: 'dollars' }, trx = db) {
   if (options.moneyFormat !== 'dollars' && options.moneyFormat !== 'cents') {
     throw new Error ('Invalid money format.');
   }
 
-  const query = db ('transactions as t')
+  const query = trx ('transactions as t')
     .join ('transactions_member_junction as tm', 't.id', 'tm.transaction_id')
     .select (
       't.id',
@@ -227,35 +228,57 @@ async function categoriesGetHandler (request, reply) {
   return allCategories;
 }
 
-async function balancesGetHandler (request, reply, options = { moneyFormat: 'dollars' }) {
+
+async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = db) {
   if (options.moneyFormat !== 'dollars' && options.moneyFormat !== 'cents') {
-    reply.code (500).send ({ error: 'Internal server error: Invalid money format in function balanceGetHandler' });
+    throw new Error ('Invalid money format. Please contact the maintainer.');
   }
 
-  const ledgerName = request.params.ledgerName;
-  const ledger = await db ('ledgers').where ({ name: ledgerName }).first ();
+  const ledgerExists = await trx ('ledgers').where ({ name: ledger }).first ();
 
-  if (ledger === undefined) {
-    return reply.code (404).send ({ error: 'The specified ledger does not exist.' });
-  }
+  if (ledgerExists === undefined) return undefined;
 
-  const transactions = await getTransactions ({ ledger: ledgerName }, { format: 'hash', useExchangeRates: true, moneyFormat: 'cents' });
-  const members = await db ('members').where ({ ledger: ledgerName }).select ('name').then (members => members.map (member => member.name));
+  const transactions = await getTransactions ({ ledger }, { format: 'hash', useExchangeRates: true, moneyFormat: 'cents' }, trx);
+  const members = await trx ('members').where ({ ledger }).select ('name', 'active');
 
-  return members.map (member => {
-    const paid = sum (transactions.map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].paid : transaction.contributions[member].paid) : 0));
-    const owes = sum (transactions.map (transaction => transaction.contributions[member] ? (transaction.expense_type === 'income' ? -transaction.contributions[member].owes : transaction.contributions[member].owes) : 0));
+  const processMember = (member) => {
+    const m = member.name;
+
+    const paid = sum (transactions.map (transaction => transaction.contributions[m] ? (transaction.expense_type === 'income' ? -transaction.contributions[m].paid : transaction.contributions[m].paid) : 0));
+    const owes = sum (transactions.map (transaction => transaction.contributions[m] ? (transaction.expense_type === 'income' ? -transaction.contributions[m].owes : transaction.contributions[m].owes) : 0));
+    const balance = paid - owes;
+
+    if (member.active !== true) {
+      if (balance !== 0) throw new Error ('Assertion failure: inactive member has a non-zero balance. Please contact the maintainer.');
+      return undefined;
+    }
 
     if (options.moneyFormat === 'dollars') {
-      return { name: member, paid: integerCentsToDollars (paid), owes: integerCentsToDollars (owes), balance: integerCentsToDollars (paid - owes) };
+      return { name: m, paid: integerCentsToDollars (paid), owes: integerCentsToDollars (owes), balance: integerCentsToDollars (balance) };
     } else {
-      return { name: member, paid, owes, balance: paid - owes };
+      return { name: m, paid, owes, balance };
     }
-  });
+  }
+
+  return members.map (processMember).filter (m => m !== undefined);
+}
+
+async function balancesGetHandler (request, reply) {
+  try {
+    const balance = await getBalance (request.params.ledgerName);
+
+    if (balance === undefined) {
+      return reply.code (404).send ({ error: 'The specified ledger does not exist.' });
+    }
+
+    return balance;
+  } catch (error) {
+    return reply.code (500).send ({ error: `Internal server error: ${error.message}` });
+  }
 }
 
 async function settlementsGetHandler (request, reply) {
-  let balances = await balancesGetHandler (request, reply, { moneyFormat: 'cents' });
+  let balances = await getBalance (request.params.ledgerName, { moneyFormat: 'cents' });
 
   balances = balances.filter (balance => balance.balance !== 0);
   balances.sort ((a, b) => b.balance - a.balance);
@@ -345,7 +368,7 @@ async function updateAddTransaction (transaction, isUpdate) {
         weight: transaction.weights[index],
         amount: Math.floor (transaction.paid[index] * 100),
         ledger: transaction.ledger
-      }));
+      })).filter (item => item.amount !== 0 || item.weight !== 0);
       
       await trx ('transactions_member_junction').insert (transactionsMemberJunctionItems);
     });
