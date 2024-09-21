@@ -1,11 +1,7 @@
 import Fastify from 'fastify';
 import Knex from 'knex';
-import Lodash from 'lodash';
-import RRuleModule from 'rrule';
-
-const { sum, uniq, omit, pick, groupBy, fromPairs } = Lodash;
-const { RRule, datetime } = RRuleModule;
-
+import RRuleModule from 'rrule'; const { RRule, datetime } = RRuleModule;
+import { sum, uniq, omit, pick, groupBy, fromPairs } from 'lodash-es';
 import cors from '@fastify/cors';
 import cron from 'node-cron';
 
