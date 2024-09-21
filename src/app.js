@@ -353,7 +353,6 @@ async function updateAddTransaction (transaction, isUpdate) {
     throw new Error ('Internal server error: Unable to insert transaction into the database.');
   }
 
-  console.log (transaction.id);
   return transaction.id;
 }
 
