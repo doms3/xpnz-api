@@ -305,6 +305,56 @@ async function settlementsGetHandler (request, reply) {
   // TODO: Find subgroups of zero sum transactions and settle them separately to reduce the number of transactions.
 }
 
+async function membersDeleteHandler (request, reply) {
+  const { memberName, ledgerName } = request.params;
+
+  try {
+    await db.transaction (async (trx) => {
+      const balance = await getBalance (ledgerName, { moneyFormat: 'cents' }, trx);
+
+      if (balance === undefined) {
+        throw { status: 404, message: 'The specified resource does not exist.' };
+      }
+
+      const memberBalance = balance.find (member =>
+        typeof member.name === 'string' && member.name.toLowerCase () === memberName.toLowerCase ()
+      );
+
+      if (memberBalance === undefined) {
+        throw { status: 404, message: 'The specified resource does not exist.' };
+      }
+
+      if (memberBalance.balance !== 0) {
+        throw { status: 400, message: 'Cannot delete a member with a non-zero balance.' };
+      }
+
+      const involvedInAnyTransactions = await trx ('transactions_member_junction').where ({ member: memberName }).first ().then (result => result !== undefined);
+
+      if (involvedInAnyTransactions) {
+        // update member.active = false
+        await trx ('members').where ({ ledger: ledgerName, name: memberName }).update ({ active: false });
+      } else {
+        // just delete it outright
+        await trx ('members').where ({ ledger: ledgerName, name: memberName }).del ();
+      }
+    });
+
+    return reply.code (200).send ();
+  } catch (error) {
+    // Handle errors
+    error.status = error.status || 500;
+
+    if (error.status === 500) {
+      if (error.message) error.message = `Internal server error: ${error.message}`;
+      else error.message = 'Internal server error: please contact the maintainer.';
+    } else if (error.message === undefined || error.message === null) {
+      error.message = 'Something was wrong with this request but we don\'t know what. Contact the maintainer.';
+    }
+
+    return reply.code (error.status).send ({ message: error.message });
+  }
+}
+
 async function updateAddTransaction (transaction, isUpdate) {
   if (transaction.name) transaction.name = transaction.name.trim ();
   if (transaction.category) transaction.category = transaction.category.trim ();
@@ -691,6 +741,7 @@ app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, led
 app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
 app.get ('/members/:ledgerName/:memberName', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
 app.put ('/members/:ledgerName/:memberName', membersPutHandler);
+app.delete ('/members/:ledgerName/:memberName', membersDeleteHandler);
 
 app.get ('/transactions', { schema: { querystring: transactionsGetQuerySchema } }, transactionsGetHandler);
 app.get ('/transactions/:id', transactionsGetHandler);
