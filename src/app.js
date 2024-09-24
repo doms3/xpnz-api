@@ -248,7 +248,7 @@ async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = d
     const owes = sum (transactions.map (transaction => transaction.contributions[m] ? (transaction.expense_type === 'income' ? -transaction.contributions[m].owes : transaction.contributions[m].owes) : 0));
     const balance = paid - owes;
 
-    if (member.active !== true) {
+    if (Boolean (member.active) !== true) {
       if (balance !== 0) throw new Error ('Assertion failure: inactive member has a non-zero balance. Please contact the maintainer.');
       return undefined;
     }
