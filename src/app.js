@@ -136,7 +136,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     transaction.member_ids = transactions.map (t => t.member_id);
     transaction.weights = transactions.map (t => t.weight);
     transaction.paid = paid;
-    transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transactions[0]);
+    transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transaction.id);
 
     if (options.moneyFormat === 'dollars') {
         transaction.paid = transaction.paid.map (integerCentsToDollars);
