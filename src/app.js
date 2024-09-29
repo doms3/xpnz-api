@@ -13,7 +13,7 @@ const app = Fastify ({ logger: true });
 app.register (cors, { origin: '*' });
 
 async function membersGetHandler (request, reply) {
-  const filters = pick (request.query, ['ledger', 'name', 'active']);
+  const filters = pick (request.query, ['ledger', 'name', 'is_active']);
 
   if (request.params.ledgerName) filters.ledger = request.params.ledgerName;
   if (request.params.memberName) filters.name = request.params.memberName;
@@ -21,13 +21,13 @@ async function membersGetHandler (request, reply) {
   const isRequestingSingleMember = request.params.memberName !== undefined && request.params.ledgerName !== undefined;
 
   const members = await db ('members')
-    .select ('name', 'ledger', 'active')
+    .select ('name', 'ledger', 'is_active')
     .modify (builder => {
       if (filters.ledger) builder.where ('ledger', filters.ledger);
       if (filters.name) builder.where ('name', filters.name);
-      if (filters.active) builder.where ('active', filters.active);
+      if (filters.is_active) builder.where ('is_active', filters.is_active);
     })
-    .then (members => members.map (member => ({ name: member.name, ledger: member.ledger, active: Boolean (member.active) })));
+    .then (members => members.map (member => ({ name: member.name, ledger: member.ledger, is_active: Boolean (member.is_active) })));
 
   if (isRequestingSingleMember && members.length === 0) {
     return reply.code (404).send ({ error: 'The specified resource could not be found.' });
@@ -45,8 +45,8 @@ async function membersPutHandler (request, reply) {
     return reply.code (404).send ({ error: 'The specified resource could not be found.' });
   }
 
-  // request.body is either {} or { active: true/false }, if its empty make it true
-  const member = { name: memberName, ledger: ledgerName, active: request.body.active === undefined ? true : request.body.active };
+  // request.body is either {} or { is_active: true/false }, if its empty make it true
+  const member = { name: memberName, ledger: ledgerName, is_active: request.body.is_active === undefined ? true : request.body.is_active };
 
   // if request.body.name is present, and it matches the memberName (up to case), use it
   if (request.body.name) {
@@ -239,7 +239,7 @@ async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = d
   if (ledgerExists === undefined) return undefined;
 
   const transactions = await getTransactions ({ ledger }, { format: 'hash', useExchangeRates: true, moneyFormat: 'cents' }, trx);
-  const members = await trx ('members').where ({ ledger }).select ('name', 'active');
+  const members = await trx ('members').where ({ ledger }).select ('name', 'is_active');
 
   const processMember = (member) => {
     const m = member.name;
@@ -248,7 +248,7 @@ async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = d
     const owes = sum (transactions.map (transaction => transaction.contributions[m] ? (transaction.expense_type === 'income' ? -transaction.contributions[m].owes : transaction.contributions[m].owes) : 0));
     const balance = paid - owes;
 
-    if (Boolean (member.active) !== true) {
+    if (Boolean (member.is_active) !== true) {
       if (balance !== 0) throw new Error ('Assertion failure: inactive member has a non-zero balance. Please contact the maintainer.');
       return undefined;
     }
@@ -332,7 +332,7 @@ async function membersDeleteHandler (request, reply) {
 
       if (involvedInAnyTransactions) {
         // update member.active = false
-        await trx ('members').where ({ ledger: ledgerName, name: memberName }).update ({ active: false });
+        await trx ('members').where ({ ledger: ledgerName, name: memberName }).update ({ is_active: false });
       } else {
         // just delete it outright
         await trx ('members').where ({ ledger: ledgerName, name: memberName }).del ();
@@ -641,11 +641,11 @@ const transactionsGetQuerySchema = {
 
 const membersGetResponseSchemaWithRoute = {
   type: 'object',
-  required: ['name', 'ledger', 'active'],
+  required: ['name', 'ledger', 'is_active'],
   properties: {
     name: { type: 'string' },
     ledger: { type: 'string' },
-    active: { type: 'boolean'}
+    is_active: { type: 'boolean'}
   }
 }
 

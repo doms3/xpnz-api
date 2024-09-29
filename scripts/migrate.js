@@ -43,7 +43,7 @@ async function makeMembersTable () {
     CREATE TABLE \`members\` (
       \`name\` varchar(255) collate nocase,
       \`ledger\` varchar(255),
-      \`active\` boolean,
+      \`is_active\` boolean,
       primary key (\`name\`, \`ledger\`),
       foreign key (\`ledger\`) references \`ledgers\`(\`name\`)
     );
@@ -100,7 +100,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   // get all unique members in the transactions
   var members = [...new Set (txs.map (tx => [...tx.for.members, ...tx.by.members]).flat ())];
 
-  await db ('members').insert (members.map (name => ({ name: name, ledger: ledgername, active: true })));
+  await db ('members').insert (members.map (name => ({ name: name, ledger: ledgername, is_active: true })));
 
   var txsMemberJunctionRows = [];
 
