@@ -39,15 +39,19 @@ async function makeRecurrencesTable () {
 }
 
 async function makeMembersTable () {
-  await db.schema.raw (`
-    CREATE TABLE \`members\` (
-      \`name\` varchar(255) collate nocase,
-      \`ledger\` varchar(255),
-      \`is_active\` boolean,
-      primary key (\`name\`, \`ledger\`),
-      foreign key (\`ledger\`) references \`ledgers\`(\`name\`)
-    );
-  `);
+  await db.schema.createTable ('members', table => {
+    table.string ('id').primary ();
+    table.string ('ledger').references ('name').inTable ('ledgers');
+    table.boolean ('is_active');
+  });
+
+  // add name column to members table with collation nocase using a raw query
+  await db.schema.raw ("ALTER TABLE `members` ADD COLUMN `name` varchar(255) collate nocase");
+
+  // add unique constraint to members table that enforces unique name per ledger
+  await db.schema.table ('members', table => {
+    table.unique (['name', 'ledger']);
+  });
 }
 
 function makeTransactionsMembersJunction (table) {
@@ -100,7 +104,7 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
   // get all unique members in the transactions
   var members = [...new Set (txs.map (tx => [...tx.for.members, ...tx.by.members]).flat ())];
 
-  await db ('members').insert (members.map (name => ({ name: name, ledger: ledgername, is_active: true })));
+  await db ('members').insert (members.map (name => ({ id: generateId(), name: name, ledger: ledgername, is_active: true })));
 
   var txsMemberJunctionRows = [];
 

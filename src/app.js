@@ -13,21 +13,21 @@ const app = Fastify ({ logger: true });
 app.register (cors, { origin: '*' });
 
 async function membersGetHandler (request, reply) {
-  const filters = pick (request.query, ['ledger', 'name', 'is_active']);
+  const filters = pick (request.query, ['id', 'ledger', 'name', 'is_active']);
 
-  if (request.params.ledgerName) filters.ledger = request.params.ledgerName;
-  if (request.params.memberName) filters.name = request.params.memberName;
+  if (request.params.id) filters.id = request.params.id;
 
-  const isRequestingSingleMember = request.params.memberName !== undefined && request.params.ledgerName !== undefined;
+  const isRequestingSingleMember = request.params.id !== undefined;
 
   const members = await db ('members')
-    .select ('name', 'ledger', 'is_active')
+    .select ('id', 'name', 'ledger', 'is_active')
     .modify (builder => {
+      if (filters.id) builder.where ({ id: filters.id });
       if (filters.ledger) builder.where ('ledger', filters.ledger);
       if (filters.name) builder.where ('name', filters.name);
       if (filters.is_active) builder.where ('is_active', filters.is_active);
     })
-    .then (members => members.map (member => ({ name: member.name, ledger: member.ledger, is_active: Boolean (member.is_active) })));
+    .then (members => members.map (member => ({ id: member.id, name: member.name, ledger: member.ledger, is_active: Boolean (member.is_active) })));
 
   if (isRequestingSingleMember && members.length === 0) {
     return reply.code (404).send ({ error: 'The specified resource could not be found.' });
@@ -36,42 +36,48 @@ async function membersGetHandler (request, reply) {
   return isRequestingSingleMember ? members[0] : members;
 }
 
-async function membersPutHandler (request, reply) {
-  const { memberName, ledgerName } = request.params;
+async function membersPutPostHandler (request, reply) {
+  const isPost = request.params.id === undefined;
+  const isPut = request.params.id !== undefined;
 
-  const resolvedLedgerName = await db ('ledgers').where ({ name: ledgerName }).first ().then (ledger => ledger ? ledger.name : undefined);
+  if (request.body.id !== undefined) {
+    if (isPost) {
+      // request is malformed, you cannot specify an id on POST
+      return reply.code (400).send ({ error: 'This API does not support user-generated ids, please leave the id field blank and let the server generate an id.'});
+    }
 
-  if (resolvedLedgerName === undefined) {
-    return reply.code (404).send ({ error: 'The specified resource could not be found.' });
-  }
-
-  // request.body is either {} or { is_active: true/false }, if its empty make it true
-  const member = { name: memberName, ledger: ledgerName, is_active: request.body.is_active === undefined ? true : request.body.is_active };
-
-  // if request.body.name is present, and it matches the memberName (up to case), use it
-  if (request.body.name) {
-    if (request.body.name.toLowerCase () === memberName.toLowerCase ()) {
-      member.name = request.body.name;
-    } else {
-      // this is a malformed request, the memberName in the path does not match the member name in the object
-      return reply.code (400).send ({ error: 'The member name in the path does not match the member name in the object.' });
+    if (isPut && request.body.id !== request.params.id) {
+      return reply.code (400).send ({ error: 'The request is malformed. The id in the request body does not match the id in the URL.' });
     }
   }
 
-  try {
-    await db.transaction (async trx => {
-      const existingMember = await trx ('members').where ({ name: memberName, ledger: ledgerName }).first ();
+  if (isPost) {
+    const getUniqueId = async () => { const id = generateId(); return await db ('members').where ({ id }).first ().then (member => member ? getUniqueId () : id); };
+    const member = { ...pick (request.body, ['name', 'ledger', 'is_active']), id: await getUniqueId () };
 
-      if (existingMember) {
-        await trx ('members').where ({ name: memberName, ledger: ledgerName }).update (member);
-      } else {
-        await trx ('members').insert (member);
-      }
-    });
+    const existingMember = await db ('members').where ({ name: member.name, ledger: member.ledger }).first ();
+    if (existingMember) {
+      return reply.code (409).send ({ error: 'A member with the same name and ledger already exists.' });
+    }
 
-    reply.code (201).send ({ message: 'Member updated successfully.', member });
-  } catch (error) {
-    reply.code (500).send ({ error: `Internal server error: ${error.message}` });
+    await db ('members').insert (member);
+    return reply.code (201).send ({ message: 'Member created successfully.', member });
+  } else /* isPut */ {
+    const member = { ...pick (request.body, ['name', 'ledger', 'is_active']), id: request.params.id };
+
+    const existingMember = await db ('members').where ({ name: member.name, ledger: member.ledger }).select ('id').first ().then (member => member ? member.id : undefined);
+    if (existingMember && existingMember !== member.id) {
+      return reply.code (409).send ({ error: 'A member with the same name and ledger already exists.' });
+    }
+
+    // try and update, if it fails because the resource doesn't exist, add it
+    const updated = await db ('members').where ({ id: member.id }).update (omit (member, 'id'));
+    if (updated === 0) {
+      await db ('members').insert (member);
+      return reply.code (201).send ({ message: 'Member created successfully.', member });
+    } else {
+      return reply.code (200).send ({ message: 'Member updated successfully.', member });
+    }
   }
 }
 
@@ -239,7 +245,7 @@ async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = d
   if (ledgerExists === undefined) return undefined;
 
   const transactions = await getTransactions ({ ledger }, { format: 'hash', useExchangeRates: true, moneyFormat: 'cents' }, trx);
-  const members = await trx ('members').where ({ ledger }).select ('name', 'is_active');
+  const members = await trx ('members').where ({ ledger }).select ('id', 'name', 'is_active');
 
   const processMember = (member) => {
     const m = member.name;
@@ -254,9 +260,9 @@ async function getBalance (ledger, options = { moneyFormat: 'dollars' }, trx = d
     }
 
     if (options.moneyFormat === 'dollars') {
-      return { name: m, paid: integerCentsToDollars (paid), owes: integerCentsToDollars (owes), balance: integerCentsToDollars (balance) };
+      return { name: m, id: member.id, paid: integerCentsToDollars (paid), owes: integerCentsToDollars (owes), balance: integerCentsToDollars (balance) };
     } else {
-      return { name: m, paid, owes, balance };
+      return { name: m, id: member.id, paid, owes, balance };
     }
   }
 
@@ -306,36 +312,30 @@ async function settlementsGetHandler (request, reply) {
 }
 
 async function membersDeleteHandler (request, reply) {
-  const { memberName, ledgerName } = request.params;
+  const { id } = request.params;
 
   try {
     await db.transaction (async (trx) => {
-      const balance = await getBalance (ledgerName, { moneyFormat: 'cents' }, trx);
+      const member = await trx ('members').where ({ id }).first ();
+      if (member === undefined) throw { status: 404, message: 'The specified member does not exist.' };
 
-      if (balance === undefined) {
-        throw { status: 404, message: 'The specified resource does not exist.' };
-      }
-
-      const memberBalance = balance.find (member =>
-        typeof member.name === 'string' && member.name.toLowerCase () === memberName.toLowerCase ()
+      const balance = await getBalance (member.ledger, { moneyFormat: 'cents' }, trx);
+      const memberBalance = balance.find (m =>
+        typeof m.name === 'string' && m.name.toLowerCase () === member.name.toLowerCase ()
       );
-
-      if (memberBalance === undefined) {
-        throw { status: 404, message: 'The specified resource does not exist.' };
-      }
 
       if (memberBalance.balance !== 0) {
         throw { status: 400, message: 'Cannot delete a member with a non-zero balance.' };
       }
 
-      const involvedInAnyTransactions = await trx ('transactions_member_junction').where ({ member: memberName }).first ().then (result => result !== undefined);
+      const involvedInAnyTransactions = await trx ('transactions_member_junction').where ({ member: member.name, ledger: member.ledger }).first ().then (result => result !== undefined);
 
       if (involvedInAnyTransactions) {
-        // update member.active = false
-        await trx ('members').where ({ ledger: ledgerName, name: memberName }).update ({ is_active: false });
+        // update member.is_active = false
+        await trx ('members').where ({ ledger: member.ledger, name: member.name }).update ({ is_active: false });
       } else {
         // just delete it outright
-        await trx ('members').where ({ ledger: ledgerName, name: memberName }).del ();
+        await trx ('members').where ({ ledger: member.ledger, name: member.name }).del ();
       }
     });
 
@@ -641,8 +641,9 @@ const transactionsGetQuerySchema = {
 
 const membersGetResponseSchemaWithRoute = {
   type: 'object',
-  required: ['name', 'ledger', 'is_active'],
+  required: ['id', 'name', 'ledger', 'is_active'],
   properties: {
+    id: { type: 'string' },
     name: { type: 'string' },
     ledger: { type: 'string' },
     is_active: { type: 'boolean'}
@@ -653,6 +654,18 @@ const membersGetResponseSchema = {
   type: 'array',
   items: membersGetResponseSchemaWithRoute
 }
+
+const membersPutPostBodySchema = {
+  type: 'object',
+  required: ['name', 'ledger', 'is_active'],
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    ledger: { type: 'string' },
+    is_active: { type: 'boolean'}
+  },
+  additionalProperties: false
+};
 
 async function createRecurringTransactions () {
   const recurrences = await db ('recurrences')
@@ -731,6 +744,8 @@ async function createRecurringTransactions () {
   }
 }
 
+
+
 // cron.schedule ('0 0 * * *', createRecurringTransactions);
 
 app.get ('/ledgers', ledgersGetHandler);
@@ -739,9 +754,10 @@ app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, led
 // app.delete ('/ledgers/:ledgerName', ledgersDeleteHandler);
 
 app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
-app.get ('/members/:ledgerName/:memberName', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
-app.put ('/members/:ledgerName/:memberName', membersPutHandler);
-app.delete ('/members/:ledgerName/:memberName', membersDeleteHandler);
+app.get ('/members/:id', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
+app.put ('/members/:id', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
+app.delete ('/members/:id', membersDeleteHandler);
+app.post ('/members', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
 
 app.get ('/transactions', { schema: { querystring: transactionsGetQuerySchema } }, transactionsGetHandler);
 app.get ('/transactions/:id', transactionsGetHandler);
