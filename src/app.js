@@ -89,6 +89,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
 
   const query = trx ('transactions as t')
     .join ('transactions_member_junction as tm', 't.id', 'tm.transaction_id')
+    .join ('members as m', 'tm.member_id', 'm.id')
     .select (
       't.id',
       't.name',
@@ -97,10 +98,11 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       't.date',
       't.exchange_rate',
       't.expense_type',
-      'tm.member',
+      'm.name as member',
+      'm.ledger',
+      'tm.member_id',
       'tm.amount',
-      'tm.weight',
-      'tm.ledger'
+      'tm.weight'
     )
     .orderBy ([{ column: 't.date', order: 'desc' }, { column: 't.created_at', order: 'desc' }])
     .modify (builder => {
@@ -108,7 +110,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
       builder.where ('t.is_deleted', false);
 
       if (filters.id) builder.where ('t.id', filters.id);
-      if (filters.ledger) builder.where ('tm.ledger', filters.ledger);
+      if (filters.ledger) builder.where ('m.ledger', filters.ledger);
       if (filters.name) builder.where ('t.name', filters.name);
       if (filters.category) builder.where ('t.category', filters.category);
       if (filters.currency) builder.where ('t.currency', filters.currency);
@@ -124,7 +126,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
   const transactionsRaw = uniqueIds.map (id => groupedTransactions[id]);
 
   const transactions = transactionsRaw.map (transactions => {
-    let transaction = omit (transactions[0], ['member', 'amount', 'weight']);
+    let transaction = omit (transactions[0], ['member', 'amount', 'weight', 'member_id']);
     
     const multiplier = options.useExchangeRates ? transaction.exchange_rate : 1;
     const paid = transactions.map (({amount}) => integerMultiplyByFloat (amount, multiplier));
@@ -132,6 +134,7 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     // Basic array format structure
     transaction.amount = sum (paid);
     transaction.members = transactions.map (t => t.member);
+    transaction.member_ids = transactions.map (t => t.member_id);
     transaction.weights = transactions.map (t => t.weight);
     transaction.paid = paid;
     transaction.owes = integerSplitByWeights (transaction.amount, transaction.weights, transactions[0]);
@@ -145,14 +148,14 @@ async function getTransactions (filters, options = { format: 'array', useExchang
     if (options.format === 'array') return transaction;
 
     if (options.format === 'object') {
-      const memberContributions = transaction.members.map ((m, i) => ({ member: m, weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }));
-      return omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes']);
+      const memberContributions = transaction.members.map ((m, i) => ({ member: m, id: transaction.member_ids[i], weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }));
+      return omit ({ ...transaction, contributions: memberContributions }, ['members', 'weights', 'paid', 'owes', 'member_ids']);
     }
 
     if (options.format === 'hash') {
-      const memberContributions = transaction.members.map ((m, i) => [ m, { weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }]);
+      const memberContributions = transaction.members.map ((m, i) => [ m, { id: transaction.member_ids[i], weight: transaction.weights[i], paid: transaction.paid[i], owes: transaction.owes[i] }]);
 
-      return omit ({ ...transaction, contributions: fromPairs (memberContributions) }, ['members', 'weights', 'paid', 'owes']);
+      return omit ({ ...transaction, contributions: fromPairs (memberContributions) }, ['members', 'weights', 'paid', 'owes', 'member_ids']);
     }
 
     throw new Error ('Invalid format.');
@@ -328,14 +331,14 @@ async function membersDeleteHandler (request, reply) {
         throw { status: 400, message: 'Cannot delete a member with a non-zero balance.' };
       }
 
-      const involvedInAnyTransactions = await trx ('transactions_member_junction').where ({ member: member.name, ledger: member.ledger }).first ().then (result => result !== undefined);
+      const involvedInAnyTransactions = await trx ('transactions_member_junction').where ({ member_id: member.id }).first ().then (result => result !== undefined);
 
       if (involvedInAnyTransactions) {
         // update member.is_active = false
-        await trx ('members').where ({ ledger: member.ledger, name: member.name }).update ({ is_active: false });
+        await trx ('members').where ({ id }).update ({ is_active: false });
       } else {
         // just delete it outright
-        await trx ('members').where ({ ledger: member.ledger, name: member.name }).del ();
+        await trx ('members').where ({ id }).del ();
       }
     });
 
@@ -506,31 +509,31 @@ async function validateTransaction (transaction) {
   }
 }
 
-async function ledgersDeleteHandler (request, reply) {
-  const ledgerName = request.params.ledgerName;
-
-  // Start a transaction
-  await db.transaction (async trx => {
-    const ledger = await trx ('ledgers').where ('name', ledgerName).first ();
-
-    if (ledger === undefined) {
-      reply.code (204).send ({ message: 'The specified resource does not exist.' });
-      return;
-    }
-
-    // Delete all members and transactions associated with the ledger
-    await trx ('members').where ('ledger', ledgerName).del ();
-    await trx ('recurrences').join ('transactions', 'recurrences.template_id', 'transactions.id').where ('transactions.ledger', ledgerName).del ();
-    await trx ('transactions').where ('ledger', ledgerName).del ();
-    await trx ('transactions_member_junction').where ('ledger', ledgerName).del ();
-    await trx ('ledgers').where ('name', ledgerName).del ();
-
-    reply.code (200).send ({ message: 'Ledger deleted successfully.' });
-  }).catch (error => {
-    console.error (error);
-    reply.code (500).send ({ error: 'Internal server error: Unable to delete ledger.' });
-  });
-}
+// async function ledgersDeleteHandler (request, reply) {
+//   const ledgerName = request.params.ledgerName;
+// 
+//   // Start a transaction
+//   await db.transaction (async trx => {
+//     const ledger = await trx ('ledgers').where ('name', ledgerName).first ();
+// 
+//     if (ledger === undefined) {
+//       reply.code (204).send ({ message: 'The specified resource does not exist.' });
+//       return;
+//     }
+// 
+//     // Delete all members and transactions associated with the ledger
+//     await trx ('members').where ('ledger', ledgerName).del ();
+//     await trx ('recurrences').join ('transactions', 'recurrences.template_id', 'transactions.id').where ('transactions.ledger', ledgerName).del ();
+//     await trx ('transactions').where ('ledger', ledgerName).del ();
+//     await trx ('transactions_member_junction').where ('ledger', ledgerName).del ();
+//     await trx ('ledgers').where ('name', ledgerName).del ();
+// 
+//     reply.code (200).send ({ message: 'Ledger deleted successfully.' });
+//   }).catch (error => {
+//     console.error (error);
+//     reply.code (500).send ({ error: 'Internal server error: Unable to delete ledger.' });
+//   });
+// }
 
 async function transactionsDeleteHandler (request, reply) {
   const id = request.params.id;

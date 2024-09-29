@@ -56,12 +56,10 @@ async function makeMembersTable () {
 
 function makeTransactionsMembersJunction (table) {
   table.string ('transaction_id').references ('id').inTable ('transactions');
-  table.string ('member');
-  table.string ('ledger').references ('name').inTable ('ledgers');
+  table.string ('member_id').references ('id').inTable ('members');
   table.integer ('amount'); // integer in cents
   table.float ('weight');
-  table.foreign (['member', 'ledger']).references (['name', 'ledger']).inTable ('members');
-  table.primary (['transaction_id', 'member', 'ledger']);
+  table.primary (['transaction_id', 'member_id']);
 }
 
 async function createTables () {
@@ -103,14 +101,15 @@ async function importTransactionsFromJsonFile (filename, ledgername) {
 
   // get all unique members in the transactions
   var members = [...new Set (txs.map (tx => [...tx.for.members, ...tx.by.members]).flat ())];
+  var membersAndIds = members.map (name => ({ id: generateId (), name, ledger: ledgername, is_active: true }));
 
-  await db ('members').insert (members.map (name => ({ id: generateId(), name: name, ledger: ledgername, is_active: true })));
+  await db ('members').insert (membersAndIds);
 
   var txsMemberJunctionRows = [];
 
   // build the rows for the transactions_member_junction table (but use a two-dimensional array so we can add tx_id later)
   for (var tx of txs) {
-    var transactionMemberPairs = reduceToObject (members, name => name, name => ({ member: name, amount: 0, weight: 0, ledger: ledgername }));
+    var transactionMemberPairs = reduceToObject (membersAndIds, ({name}) => name, ({id}) => ({ member_id: id, amount: 0, weight: 0 }));
 
     tx.for.members.forEach ((name, index) => transactionMemberPairs[name].weight = tx.for.split_weights[index]);
     tx.by.members.forEach ((name, index) => transactionMemberPairs[name].amount = Math.floor (Math.abs(tx.by.split_values[index]) * 100)); // convert to cents
