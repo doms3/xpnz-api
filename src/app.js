@@ -767,7 +767,6 @@ app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, led
 app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
 app.get ('/members/:id', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
 app.put ('/members/:id', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
-app.patch ('/members/:id', { schema: { body: membersPatchBodySchema } }, membersPatchHandler);
 app.delete ('/members/:id', membersDeleteHandler);
 app.post ('/members', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
 
