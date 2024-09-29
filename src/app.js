@@ -789,7 +789,7 @@ app.get ('/ledgers/:ledgerName/settlement', settlementsGetHandler);
 
 const start = async () => {
   try {
-    await app.listen ({ port: 3001 })
+    await app.listen ({ port: 3001, host: '::' })
   } catch (error) {
     app.log.error (error)
     process.exit (1)
