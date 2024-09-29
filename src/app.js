@@ -70,11 +70,10 @@ async function membersPutPostHandler (request, reply) {
       return reply.code (409).send ({ error: 'A member with the same name and ledger already exists.' });
     }
 
-    // try and update, if it fails because the resource doesn't exist, add it
+    // try and update, if it fails because the resource doesn't exist, tell the user 
     const updated = await db ('members').where ({ id: member.id }).update (omit (member, 'id'));
     if (updated === 0) {
-      await db ('members').insert (member);
-      return reply.code (201).send ({ message: 'Member created successfully.', member });
+      return reply.code (404).send ({ message: 'The specified resource does not exist and thus cannot be replaced. This API does not support creating resources via. PUT, please use POST instead.' });
     } else {
       return reply.code (200).send ({ message: 'Member updated successfully.', member });
     }
@@ -670,6 +669,15 @@ const membersPutPostBodySchema = {
   additionalProperties: false
 };
 
+const membersPatchBodySchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    is_active: { type: 'boolean'}
+  },
+  additionalProperties: false
+};
+
 async function createRecurringTransactions () {
   const recurrences = await db ('recurrences')
     .join ('transactions', 'recurrences.template_id', 'transactions.id')
@@ -759,6 +767,7 @@ app.put ('/ledgers/:ledgerName', { schema: { body: ledgersPutBodySchema } }, led
 app.get ('/members', { schema: { response: { 200: membersGetResponseSchema } } }, membersGetHandler);
 app.get ('/members/:id', { schema: { response: { 200: membersGetResponseSchemaWithRoute } } }, membersGetHandler);
 app.put ('/members/:id', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
+app.patch ('/members/:id', { schema: { body: membersPatchBodySchema } }, membersPatchHandler);
 app.delete ('/members/:id', membersDeleteHandler);
 app.post ('/members', { schema: { body: membersPutPostBodySchema } }, membersPutPostHandler);
 
